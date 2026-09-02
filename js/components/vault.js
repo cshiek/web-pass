@@ -31,12 +31,16 @@
       lockBtn,
     ]);
 
+    const mainArea = ui.el('div', { class: 'entry-pane' }, [
+      ui.el('div', { class: 'search-bar' }, search),
+      list,
+    ]);
+
     const root = ui.el('div', { class: 'vault' }, [
       header,
-      ui.el('div', { class: 'search-bar' }, search),
       ui.el('div', { class: 'vault-body' }, [
         ui.el('nav', { class: 'group-tree', id: 'group-tree' }),
-        list,
+        mainArea,
       ]),
     ]);
 
@@ -57,12 +61,12 @@
         return;
       }
       const card = e.target.closest('.entry');
-      if (card) { location.hash = '#/vault/' + card.dataset.uuid; }
+      if (card) { location.hash = '#/vault/' + encodeURIComponent(card.dataset.uuid); }
     });
     search.oninput = function () { renderEntries(search.value); };
 
-    renderTree();
-    renderEntries('');
+    renderTree(root);
+    renderEntries('', root);
 
     // Inactivity auto-lock: wipe the vault after a period of no interaction.
     WP.session.arm(function () { location.hash = '#/'; });
@@ -72,66 +76,139 @@
 
   /* ---- Group tree ---- */
 
-  function renderTree() {
+  function renderTree(container) {
     const db = store.state.db;
     if (!db) return;
-    const nav = document.getElementById('group-tree');
+    const parent = container || document;
+    const nav = parent.querySelector ? parent.querySelector('#group-tree') : document.getElementById('group-tree');
     if (!nav) return;
     ui.clear(nav);
-    nav.append(treeNode(kdbx.defaultGroup(db), kdbx.groupUuid(kdbx.defaultGroup(db)), 0));
+
+    // Sidebar Header: "GROUPS" title + "+ Group" button
+    const addGroupBtn = ui.el('button', { class: 'btn btn-ghost', style: 'padding: 2px 6px; font-size: 11px;' }, '+ Group');
+    addGroupBtn.onclick = function (e) {
+      if (e) { e.stopPropagation(); e.preventDefault(); }
+      openCreateGroupModal(db);
+    };
+
+    const header = ui.el('div', { class: 'group-tree-header' }, [
+      ui.el('span', { class: 'group-tree-title' }, 'Groups'),
+      addGroupBtn,
+    ]);
+    nav.append(header);
+
+    // 1. Recycle Bin (always pinned at top of tree if present)
+    const recycleUuid = db.meta && db.meta.recycleBinUuid ? kdbx.uuidStr(db.meta.recycleBinUuid) : null;
+    let recycleGroup = null;
+    if (recycleUuid) {
+      recycleGroup = kdbx.findGroupById(db, recycleUuid);
+    }
+
+    if (recycleGroup) {
+      const binSelected = store.state.selectedGroupId === recycleUuid;
+      const binLabel = ui.el('button', { class: 'tree-label' + (binSelected ? ' selected' : '') }, '🗑️ Recycle Bin');
+      binLabel.onclick = function () {
+        store.update({ selectedGroupId: recycleUuid });
+        renderTree();
+        renderEntries(searchValue());
+      };
+      const dummyToggle = ui.el('span', { class: 'tree-toggle invisible' });
+      nav.append(ui.el('div', { class: 'tree-node' }, [ui.el('div', { class: 'tree-item' }, [dummyToggle, binLabel])]));
+    }
+
+    // 2. All Entries
+    const allSelected = store.state.selectedGroupId === null;
+    const allLabel = ui.el('button', { class: 'tree-label' + (allSelected ? ' selected' : '') }, '📁 All Entries');
+    allLabel.onclick = function () {
+      store.update({ selectedGroupId: null });
+      renderTree();
+      renderEntries(searchValue());
+    };
+    const dummyToggle2 = ui.el('span', { class: 'tree-toggle invisible' });
+    nav.append(ui.el('div', { class: 'tree-node' }, [ui.el('div', { class: 'tree-item' }, [dummyToggle2, allLabel])]));
+
+    // 3. User Groups (unpack root group children so top-level folders render directly under All Entries)
+    const rootGrp = kdbx.defaultGroup(db) || (db.groups && db.groups[0]);
+    let topLevelGroups = [];
+    if (rootGrp && rootGrp.groups && rootGrp.groups.length > 0) {
+      topLevelGroups = rootGrp.groups.filter(function (g) {
+        return !recycleUuid || kdbx.groupUuid(g) !== recycleUuid;
+      });
+    } else if (db.groups) {
+      topLevelGroups = db.groups.filter(function (g) {
+        return !recycleUuid || kdbx.groupUuid(g) !== recycleUuid;
+      });
+    }
+
+    for (const top of topLevelGroups) { nav.append(treeNode(top, kdbx.groupUuid(top), 0)); }
   }
 
   function treeNode(group, groupId, depth) {
+    const db = store.state.db;
+    const recycleUuid = db && db.meta && db.meta.recycleBinUuid ? kdbx.uuidStr(db.meta.recycleBinUuid) : null;
+    const subGroups = (group.groups || []).filter(function (sub) {
+      return !recycleUuid || kdbx.groupUuid(sub) !== recycleUuid;
+    });
+    const hasChildren = subGroups.length > 0;
     const expanded = !!store.state.expanded[groupId];
     const selected = store.state.selectedGroupId === groupId;
 
-    const toggle = ui.el('button', { class: 'tree-toggle' }, expanded ? '▾' : '▸');
+    const toggle = ui.el('button', { class: 'tree-toggle' + (hasChildren ? '' : ' invisible') }, expanded ? '▾' : '▸');
     toggle.onclick = function (e) {
       e.stopPropagation();
       store.update({ expanded: Object.assign({}, store.state.expanded, { [groupId]: !expanded }) });
       renderTree();
     };
 
-    const label = ui.el('button', { class: 'tree-label', 'data-uuid': groupId }, group.name || '(unnamed)');
-    if (selected) label.classList.add('selected');
+    const label = ui.el('button', { class: 'tree-label' + (selected ? ' selected' : ''), 'data-uuid': groupId }, group.name || '(unnamed)');
     label.onclick = function () {
       store.update({ selectedGroupId: groupId });
       renderTree();
       renderEntries(searchValue());
     };
 
+    const headerItem = ui.el('div', { class: 'tree-item' }, [toggle, label]);
+
     const children = ui.el('div', { class: 'tree-children' });
-    if (!expanded) { children.style.display = 'none'; }
-    else {
-      for (const sub of group.groups) { children.append(treeNode(sub, kdbx.groupUuid(sub), depth + 1)); }
+    if (!expanded || !hasChildren) {
+      children.style.display = 'none';
+    } else {
+      for (const sub of subGroups) {
+        children.append(treeNode(sub, kdbx.groupUuid(sub), depth + 1));
+      }
     }
 
-    return ui.el('div', { class: 'tree-node' }, [toggle, label, children]);
+    return ui.el('div', { class: 'tree-node' }, [headerItem, children]);
   }
 
   /* ---- Entry list ---- */
 
-  function renderEntries(filterText) {
+  function renderEntries(filterText, container) {
     const db = store.state.db;
     if (!db) return;
-    const list = document.getElementById('entry-list');
+    const parent = container || document;
+    const list = parent.querySelector ? parent.querySelector('#entry-list') : document.getElementById('entry-list');
     if (!list) return;
     ui.clear(list);
 
-    const q = (filterText || '').toLowerCase().trim();
     let entries;
+    if (store.state.selectedGroupId) {
+      const group = kdbx.findGroupById(db, store.state.selectedGroupId);
+      entries = group ? kdbx.groupEntries(db, group) : kdbx.allEntries(db);
+    } else {
+      entries = kdbx.allEntries(db);
+    }
+
+    const q = (filterText || '').toLowerCase().trim();
     if (q) {
-      entries = kdbx.allEntries(db).filter(function (e) {
+      entries = entries.filter(function (e) {
         return kdbx.entryTitle(e).toLowerCase().indexOf(q) > -1
           || kdbx.fieldText(e, 'U').toLowerCase().indexOf(q) > -1
           || kdbx.fieldText(e, 'W').toLowerCase().indexOf(q) > -1;
       });
-    } else {
-      const group = store.state.selectedGroupId ? db.getGroup(store.state.selectedGroupId) : kdbx.defaultGroup(db);
-      entries = group && group.entries ? group.entries : [];
     }
 
-    const countEl = document.getElementById('entry-count');
+    const countEl = parent.querySelector ? parent.querySelector('#entry-count') : document.getElementById('entry-count');
     if (countEl) countEl.textContent = entries.length + ' entry' + (entries.length === 1 ? '' : 's');
 
     if (entries.length === 0) {
@@ -143,14 +220,32 @@
   }
 
   function entryCard(entry) {
+    const db = store.state.db;
     const username = kdbx.fieldText(entry, 'U') || '—';
     const password = kdbx.fieldText(entry, 'P');
     const website = kdbx.fieldText(entry, 'W');
 
-    const head = ui.el('div', { class: 'entry-head' }, [
+    const isRecycled = kdbx.inRecycleBin(db, entry);
+    const rootGrp = kdbx.defaultGroup(db) || (db && db.groups && db.groups[0]);
+    const isRoot = entry.parentGroup && rootGrp && (kdbx.groupUuid(entry.parentGroup) === kdbx.groupUuid(rootGrp));
+    const rawGrpName = entry.parentGroup ? entry.parentGroup.name : '';
+    const grpName = isRoot ? 'Top Level' : rawGrpName;
+
+    const headElements = [
       ui.el('strong', {}, kdbx.entryTitle(entry)),
-      ui.el('span', { class: 'muted' }, username),
-    ]);
+    ];
+
+    if (isRecycled) {
+      headElements.push(
+        ui.el('span', { class: 'group-badge warning' }, '🗑️ Recycle Bin' + (grpName && grpName !== 'Recycle Bin' ? ' (' + grpName + ')' : ''))
+      );
+    } else if (grpName && (!store.state.selectedGroupId || store.state.selectedGroupId !== kdbx.groupUuid(entry.parentGroup))) {
+      headElements.push(
+        ui.el('span', { class: 'group-badge' }, '📁 ' + grpName)
+      );
+    }
+
+    const head = ui.el('div', { class: 'entry-head' }, headElements);
 
     const rows = [
       fieldRow('Username', username, username && copyBtn(username, 'Copy', 'username')),
@@ -183,6 +278,8 @@
     const entry = kdbx.findEntryById(db, id);
     if (!entry) { return detailShell('Entry not found.'); }
 
+    const isRecycled = kdbx.inRecycleBin(db, entry);
+
     // Working copy of custom fields: { id, name, value, protected }.
     // `id` is the saved field name (or a synthetic 'new-N' for unsaved fields),
     // used to detect renames and deletions on save.
@@ -198,14 +295,15 @@
     }
     let newSeq = 0;
 
-    const title = ui.el('input', { type: 'text', class: 'editor-field', value: kdbx.fieldText(entry, 'T'), placeholder: 'Title' });
-    const username = ui.el('input', { type: 'text', class: 'editor-field', value: kdbx.fieldText(entry, 'U'), placeholder: 'Username' });
-    const website = ui.el('input', { type: 'text', class: 'editor-field', value: kdbx.fieldText(entry, 'W'), placeholder: 'https://example.com' });
-    const notes = ui.el('textarea', { class: 'editor-field editor-notes', placeholder: 'Notes' });
+    const title = ui.el('input', { type: 'text', class: 'editor-field', value: kdbx.fieldText(entry, 'T'), placeholder: 'Title', disabled: isRecycled });
+    const username = ui.el('input', { type: 'text', class: 'editor-field', value: kdbx.fieldText(entry, 'U'), placeholder: 'Username', disabled: isRecycled });
+    const website = ui.el('input', { type: 'text', class: 'editor-field', value: kdbx.fieldText(entry, 'W'), placeholder: 'https://example.com', disabled: isRecycled });
+    const notes = ui.el('textarea', { class: 'editor-field editor-notes', placeholder: 'Notes', disabled: isRecycled });
     notes.value = kdbx.fieldText(entry, 'N');
     const pw = passwordField(kdbx.fieldText(entry, 'P'), function (setValue) {
       openGenerator(setValue);
     });
+    if (isRecycled) { pw.input.disabled = true; }
 
     const customWrap = ui.el('div', { class: 'custom-fields' });
     function renderCustom() {
@@ -215,58 +313,94 @@
       } else {
         for (const cf of customFields) { customWrap.append(customRow(cf)); }
       }
-      const addBtn = ui.el('button', { class: 'btn btn-ghost' }, '+ Add field');
-      addBtn.onclick = function () {
-        customFields.push({ id: 'new-' + (newSeq++), name: '', value: '', protected: false });
-        renderCustom();
-      };
-      customWrap.append(addBtn);
+      if (!isRecycled) {
+        const addBtn = ui.el('button', { class: 'btn btn-ghost' }, '+ Add field');
+        addBtn.onclick = function () {
+          customFields.push({ id: 'new-' + (newSeq++), name: '', value: '', protected: false });
+          renderCustom();
+        };
+        customWrap.append(addBtn);
+      }
     }
     function customRow(cf) {
-      const nameInput = ui.el('input', { type: 'text', class: 'cf-name', value: cf.name, placeholder: 'Name' });
-      const valueInput = ui.el('input', { type: cf.protected ? 'password' : 'text', class: 'cf-value', value: cf.value, placeholder: 'Value' });
-      const prot = ui.el('input', { type: 'checkbox', title: 'Mask this value' });
+      const nameInput = ui.el('input', { type: 'text', class: 'cf-name', value: cf.name, placeholder: 'Name', disabled: isRecycled });
+      const valueInput = ui.el('input', { type: cf.protected ? 'password' : 'text', class: 'cf-value', value: cf.value, placeholder: 'Value', disabled: isRecycled });
+      const prot = ui.el('input', { type: 'checkbox', title: 'Mask this value', disabled: isRecycled });
       prot.checked = !!cf.protected;
-      const del = ui.el('button', { class: 'icon-btn', title: 'Delete field' }, '🗑');
+      const del = isRecycled ? null : ui.el('button', { class: 'icon-btn', title: 'Delete field' }, '🗑');
       nameInput.oninput = function () { cf.name = nameInput.value; };
       valueInput.oninput = function () { cf.value = valueInput.value; };
       prot.onchange = function () { cf.protected = prot.checked; valueInput.type = prot.checked ? 'password' : 'text'; };
-      del.onclick = function () {
-        const i = customFields.indexOf(cf);
-        if (i >= 0) customFields.splice(i, 1);
-        renderCustom();
-      };
-      return ui.el('div', { class: 'custom-row' }, [nameInput, valueInput, prot, del]);
+      if (del) {
+        del.onclick = function () {
+          const i = customFields.indexOf(cf);
+          if (i >= 0) customFields.splice(i, 1);
+          renderCustom();
+        };
+      }
+      return ui.el('div', { class: 'custom-row' }, [nameInput, valueInput, prot, del].filter(Boolean));
     }
     renderCustom();
 
-    const saveBtn = ui.el('button', { class: 'btn btn-primary' }, 'Save');
-    const delBtn = ui.el('button', { class: 'btn btn-ghost', style: 'color: var(--danger)' }, 'Delete');
     const back = ui.el('button', { class: 'btn btn-ghost' }, '← Back');
     back.onclick = function () { location.hash = '#/vault'; };
-    saveBtn.onclick = saveEntry;
-    delBtn.onclick = deleteEntry;
+
+    const headerActions = [];
+
+    if (isRecycled) {
+      const restoreBtn = ui.el('button', { class: 'btn btn-primary' }, '♻️ Restore to Edit');
+      restoreBtn.onclick = restoreEntryAction;
+      const permDelBtn = ui.el('button', { class: 'btn btn-ghost', style: 'color: var(--danger)' }, '🔥 Delete Permanently');
+      permDelBtn.onclick = deletePermanentlyAction;
+      headerActions.push(restoreBtn, permDelBtn);
+    } else {
+      const saveBtn = ui.el('button', { class: 'btn btn-primary' }, 'Save');
+      saveBtn.onclick = saveEntry;
+      const delBtn = ui.el('button', { class: 'btn btn-ghost', style: 'color: var(--danger)' }, 'Delete');
+      delBtn.onclick = deleteEntry;
+      headerActions.push(saveBtn, delBtn);
+    }
+
+    // Group selector
+    const allGroups = kdbx.getAllGroups(db);
+    const currentGroupUuid = entry.parentGroup ? kdbx.groupUuid(entry.parentGroup) : null;
+    const groupSelect = ui.el('select', { class: 'editor-field', disabled: isRecycled });
+    for (const gInfo of allGroups) {
+      const opt = ui.el('option', { value: gInfo.uuid }, gInfo.label);
+      if (gInfo.uuid === currentGroupUuid) opt.selected = true;
+      groupSelect.append(opt);
+    }
+
+    const editorBodyContent = [back];
+    if (isRecycled) {
+      editorBodyContent.push(
+        ui.el('div', { class: 'status warning', style: 'margin-bottom: 1rem;' },
+          'This entry is currently in the Recycle Bin. Restore it to make changes and save.'
+        )
+      );
+    }
+    editorBodyContent.push(
+      ui.el('div', { class: 'editor-form' }, [
+        fieldBlock('Title', title),
+        fieldBlock('Group', groupSelect),
+        fieldBlock('Username', username),
+        fieldBlock('Password', pw.wrap),
+        fieldBlock('Website', website),
+        fieldBlock('Notes', notes),
+        ui.el('div', { class: 'editor-section' }, [
+          ui.el('h3', { class: 'section-title' }, 'Custom fields'),
+          customWrap,
+        ]),
+      ])
+    );
 
     return ui.el('div', { class: 'vault' }, [
       ui.el('header', { class: 'vault-header' }, [
         ui.el('span', { class: 'brand' }, 'WebPass'),
         ui.el('span', { class: 'file-name' }, store.state.fileName || ''),
-        saveBtn, delBtn,
+        headerActions,
       ]),
-      ui.el('div', { class: 'editor-body' }, [
-        back,
-        ui.el('div', { class: 'editor-form' }, [
-          fieldBlock('Title', title),
-          fieldBlock('Username', username),
-          fieldBlock('Password', pw.wrap),
-          fieldBlock('Website', website),
-          fieldBlock('Notes', notes),
-          ui.el('div', { class: 'editor-section' }, [
-            ui.el('h3', { class: 'section-title' }, 'Custom fields'),
-            customWrap,
-          ]),
-        ]),
-      ]),
+      ui.el('div', { class: 'editor-body' }, editorBodyContent),
     ]);
 
     function saveEntry() {
@@ -276,19 +410,37 @@
       kdbx.setField(entry, 'W', website.value);
       kdbx.setField(entry, 'N', notes.value);
       saveCustomFields(entry, customFields);
+
+      const targetGroup = kdbx.findGroupById(db, groupSelect.value);
+      if (targetGroup && targetGroup !== entry.parentGroup) {
+        kdbx.moveEntry(db, entry, targetGroup);
+      }
+
       store.markDirty(true);
-      toast('Saved');
-      renderEntries(searchValue());
-      renderTree();
+      toast('Entry updated. Click 💾 Save to export changes.');
+      location.hash = '#/vault';
+    }
+
+    function restoreEntryAction() {
+      kdbx.restoreEntry(store.state.db, entry);
+      store.markDirty(true);
+      toast('Entry restored. You can now edit and save changes.');
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+    }
+
+    function deletePermanentlyAction() {
+      if (!confirm('Permanently delete this entry?\n\nThis action cannot be undone.')) return;
+      kdbx.deletePermanently(store.state.db, entry);
+      store.markDirty(true);
+      toast('Entry permanently deleted.');
       location.hash = '#/vault';
     }
 
     function deleteEntry() {
-      if (!confirm('Delete this entry?\n\nThis cannot be undone.')) return;
+      if (!confirm('Move this entry to the Recycle Bin?')) return;
       kdbx.removeEntry(store.state.db, entry);
       store.markDirty(true);
-      toast('Entry deleted');
-      renderEntries(searchValue());
+      toast('Entry moved to Recycle Bin.');
       location.hash = '#/vault';
     }
   }
@@ -431,6 +583,92 @@
     lengthNum.focus();
   }
 
+  function openCreateGroupModal(db) {
+    const nameInput = ui.el('input', { type: 'text', class: 'editor-field', placeholder: 'e.g. Work, Finance, Social', style: 'margin-top: 6px;' });
+    const createBtn = ui.el('button', { class: 'btn btn-primary' }, 'Create Group');
+    const cancelBtn = ui.el('button', { class: 'btn btn-ghost' }, 'Cancel');
+
+    const recycleUuid = db.meta && db.meta.recycleBinUuid ? kdbx.uuidStr(db.meta.recycleBinUuid) : null;
+    const allGroups = kdbx.getAllGroups(db);
+    const parentSelect = ui.el('select', { class: 'editor-field', style: 'margin-top: 6px;' });
+
+    const currentSelectedId = store.state.selectedGroupId;
+    for (const gInfo of allGroups) {
+      const opt = ui.el('option', { value: gInfo.uuid }, gInfo.label);
+      if (currentSelectedId) {
+        if (gInfo.uuid === currentSelectedId) opt.selected = true;
+      } else {
+        if (gInfo.isRoot) opt.selected = true;
+      }
+      parentSelect.append(opt);
+    }
+
+    function close() {
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+      document.removeEventListener('keydown', onKey);
+    }
+    function onKey(e) { if (e.key === 'Escape') close(); }
+
+    function submit() {
+      const name = nameInput.value.trim();
+      if (!name) { toast('Please enter a group name.'); return; }
+      try {
+        let parentGrp = kdbx.findGroupById(db, parentSelect.value);
+        if (!parentGrp || (recycleUuid && kdbx.groupUuid(parentGrp) === recycleUuid)) {
+          parentGrp = kdbx.defaultGroup(db) || (db.groups && db.groups[0]);
+        }
+        const created = kdbx.createGroup(db, parentGrp, name);
+        if (created) {
+          close();
+          const parentUuid = kdbx.groupUuid(parentGrp);
+          const newUuid = kdbx.groupUuid(created);
+
+          const newExpanded = Object.assign({}, store.state.expanded, { [parentUuid]: true, [newUuid]: true });
+          store.update({ expanded: newExpanded, selectedGroupId: newUuid });
+
+          store.markDirty(true);
+          toast('Group "' + name + '" created.');
+          renderTree();
+          renderEntries();
+        }
+      } catch (err) {
+        console.error('Failed to create group:', err);
+        toast('Error creating group: ' + (err.message || String(err)));
+      }
+    }
+
+    createBtn.onclick = submit;
+    cancelBtn.onclick = close;
+
+    const overlay = ui.el('div', { class: 'modal-overlay' }, [
+      ui.el('div', { class: 'modal', style: 'max-width: 400px; width: 100%;' }, [
+        ui.el('div', { class: 'modal-head' }, [
+          ui.el('span', { class: 'modal-title' }, '📁 New Group'),
+          cancelBtn,
+        ]),
+        ui.el('div', { class: 'modal-body', style: 'display: flex; flex-direction: column; gap: 12px; padding: 16px 0;' }, [
+          ui.el('div', { class: 'field' }, [
+            ui.el('label', { class: 'small muted', style: 'font-weight: 600;' }, 'Group Name'),
+            nameInput,
+          ]),
+          ui.el('div', { class: 'field' }, [
+            ui.el('label', { class: 'small muted', style: 'font-weight: 600;' }, 'Parent Group'),
+            parentSelect,
+          ]),
+        ]),
+        ui.el('div', { class: 'modal-actions', style: 'margin-top: 16px; display: flex; justify-content: flex-end; gap: 8px;' }, [
+          cancelBtn, createBtn
+        ]),
+      ]),
+    ]);
+
+    document.body.append(overlay);
+    document.addEventListener('keydown', onKey);
+    overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+    setTimeout(function () { nameInput.focus(); }, 50);
+    nameInput.onkeydown = function (e) { if (e.key === 'Enter') submit(); };
+  }
+
   /* ---- CRUD actions ---- */
 
   function newEntry() {
@@ -439,7 +677,7 @@
     const target = group || kdbx.defaultGroup(db);
     const entry = kdbx.createEntry(db, target, { title: '' });
     store.markDirty(true);
-    location.hash = '#/vault/' + kdbx.entryUuid(entry);
+    location.hash = '#/vault/' + encodeURIComponent(kdbx.entryUuid(entry));
   }
 
   function detailShell(inner) {
@@ -462,10 +700,8 @@
     btn.disabled = true;
     btn.textContent = 'Saving…';
     try {
-      const result = await WP.save.saveDb(store.state.db);
-      toast(result.method === 'fsa'
-        ? 'Saved to ' + store.state.fileName
-        : 'Downloaded — reopen it to keep working');
+      await WP.save.saveDb(store.state.db);
+      toast('Saved — changes kept in the vault. A copy was also downloaded.');
     } catch (e) {
       toast('Save failed: ' + (e && e.message ? e.message : e));
     } finally {
@@ -484,7 +720,7 @@
   }
 
   function ensureUrl(u) {
-    return /^[a-z][a-z0-9+.-]*:\/\//i.test(u) ? 'https://' + u : u;
+    return /^[a-z][a-z0-9+.-]*:\/\//i.test(u) ? u : 'https://' + u;
   }
 
   function copyToClipboard(text, opts) {

@@ -23,7 +23,7 @@
       type: type,
     }).then(function (res) {
       const bytes = res.hash; // Uint8Array
-      return bytes.buffer.slice(0, length);
+      return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + length);
     });
   });
 })();

@@ -22,7 +22,7 @@
 
   function mount() {
     const app = document.getElementById('app');
-    const clean = location.hash.replace(/^\//, '');
+    const clean = location.hash.replace(/^#?\/?/, '');
 
     for (const r of routes) {
       const m = clean.match(r.rx);

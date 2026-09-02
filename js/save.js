@@ -1,46 +1,20 @@
-/* save.js - persist the decrypted db back to disk.
+/* save.js - persist the decrypted db using the KeeWeb browser-cache model.
  *
- * Strategy (see design.md §3.3):
- *   - Primary: File System Access API. Write to a temp file in the same
- *     directory, then overwrite the target, so an interrupted write can't
- *     corrupt the user's .kdbx (a temp copy always survives).
- *   - Fallback: Blob + <a download> for browsers without FSA (Safari, older
- *     Android). There's no handle to write to, so the user re-opens the
- *     downloaded file to keep working.
+ * A file:// page can't write back to the USB .kdbx, so saving does two things:
+ *   1. writes the encrypted bytes to the IndexedDB browser cache (durable
+ *      across reloads; see cache.js)
+ *   2. exports a Blob download so the current state lands on disk
+ *
+ * The decrypted db stays live in memory for the session, so you never have to
+ * re-open after a save. This matches KeeWeb's approach (app-model.js): local
+ * files with no cloud storage are saved to the browser cache.
  *
  * Attaches to window.WP.save */
 (function () {
   'use strict';
 
   const WP = window.WP;
-  const { store, kdbx } = WP;
-
-  function hasFSA() {
-    return typeof window.showSaveFilePicker === 'function';
-  }
-
-  // Write `buffer` to `handle` atomically: temp file first, then overwrite.
-  async function atomicSave(handle, buffer) {
-    const dirHandle = await handle.getParent();
-    const tempName = '.webpass-tmp-' + Date.now() + '.kdbx';
-    const tempHandle = await dirHandle.createChildFile(tempName);
-
-    const tempWritable = await tempHandle.createWritable();
-    await tempWritable.write(buffer);
-    await tempWritable.close();
-
-    try {
-      const target = await handle.createWritable();
-      await target.write(buffer);
-      await target.close();
-    } catch (e) {
-      // Best-effort cleanup; the temp copy still holds the latest bytes.
-      try { await dirHandle.removeChildHandle(tempName); } catch (err) { /* ignore */ }
-      throw e;
-    }
-
-    try { await dirHandle.removeChildHandle(tempName); } catch (err) { /* ignore */ }
-  }
+  const { store, kdbx, cache } = WP;
 
   // Trigger a browser download of `buffer` as `filename`.
   function download(buffer, filename) {
@@ -56,26 +30,21 @@
     URL.revokeObjectURL(url);
   }
 
-  // Re-encrypt the in-memory db and persist it.
-  // Returns { method: 'fsa' | 'download' }. Falls back to download if the FSA
-  // write fails (e.g. read-only directory) or there's no handle.
+  // Re-encrypt the in-memory db, persist it to the browser cache, and export a
+  // download. Returns { method: 'cache' }.
   async function saveDb(db) {
     const buffer = await kdbx.save(db);
-    const handle = store.state.handle;
-
-    if (hasFSA() && handle) {
-      try {
-        await atomicSave(handle, buffer);
-        store.markDirty(false);
-        return { method: 'fsa' };
-      } catch (e) {
-        // fall through to download
-      }
+    const name = store.state.fileName || 'database.kdbx';
+    try {
+      await cache.save(name, buffer);
+    } catch (e) {
+      // Cache write failed (e.g. quota). The download below still exports, so
+      // this is best-effort rather than fatal.
     }
-
-    download(buffer, store.state.fileName || 'database.kdbx');
-    return { method: 'download' };
+    store.markDirty(false);
+    download(buffer, name);
+    return { method: 'cache' };
   }
 
-  WP.save = { saveDb, atomicSave, download, hasFSA };
+  WP.save = { saveDb, download };
 })();

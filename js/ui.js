@@ -31,7 +31,7 @@
       }
     }
 
-    for (const child of children.flat()) {
+    for (const child of children.flat(Infinity)) {
       if (child == null || child === false) continue;
       node.append(child.nodeType ? child : document.createTextNode(String(child)));
     }

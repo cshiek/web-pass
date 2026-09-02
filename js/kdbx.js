@@ -7,7 +7,7 @@
   const kdbxweb = window.kdbxweb;
 
   // KeePass standard field keys. Anything else in entry.fields is a custom field.
-  const STANDARD_FIELDS = new Set(['T', 'U', 'P', 'W', 'N', 'A', 'S']);
+  const STANDARD_FIELDS = new Set(['T', 'U', 'P', 'W', 'N', 'A', 'S', 'Title', 'UserName', 'Password', 'URL', 'Notes']);
 
   function uuidStr(uuid) {
     return uuid ? uuid.toString() : null;
@@ -15,37 +15,63 @@
 
   /* ---- File opening ---- */
 
-  // Open a .kdbx via the File System Access API, falling back to <input type=file>.
-  // Resolves { buffer: ArrayBuffer, name: string, handle: FileSystemFileHandle|null }.
-  async function openFile() {
-    if (typeof window.showOpenFilePicker === 'function') {
-      const handles = await window.showOpenFilePicker({
-        multiple: false,
-        types: [{
-          description: 'KeePass Database',
-          accept: { 'application/x-kdbx': ['.kdbx'] },
-        }],
-      });
-      const handle = handles[0];
-      const file = await handle.getFile();
-      return { buffer: await file.arrayBuffer(), name: file.name, handle: handle };
-    }
-    return await openFileFallback();
-  }
-
-  function openFileFallback() {
+  // Open a .kdbx via a native file picker. Resolves
+  // { buffer: ArrayBuffer, name: string, handle: null }.
+  //
+  // Uses <input type=file> rather than the File System Access API so it works
+  // everywhere, including browsers that don't expose FSA (Firefox, the VS Code
+  // embedded browser, iOS Safari). `handle` is null, so save() writes to the
+  // browser cache and exports via download instead of overwriting the source
+  // file (the KeeWeb model — a file:// page can't write back to the USB .kdbx).
+  function openFile() {
     return new Promise(function (resolve, reject) {
       const input = document.createElement('input');
       input.type = 'file';
       input.accept = '.kdbx,application/x-kdbx';
+      input.multiple = false;
+
+      let handled = false;
+      function cleanup() {
+        if (input.parentNode) input.parentNode.removeChild(input);
+        window.removeEventListener('focus', onFocus);
+      }
+
+      function onCancel() {
+        if (handled) return;
+        handled = true;
+        cleanup();
+        const err = new Error('File selection cancelled');
+        err.name = 'AbortError';
+        reject(err);
+      }
+
+      function onFocus() {
+        setTimeout(function () {
+          if (!handled && (!input.files || input.files.length === 0)) {
+            onCancel();
+          }
+        }, 300);
+      }
+
+      input.oncancel = onCancel;
       input.onchange = function () {
+        if (handled) return;
         const file = input.files && input.files[0];
-        if (!file) { reject(new Error('No file selected')); return; }
+        if (!file) { onCancel(); return; }
+        handled = true;
+        cleanup();
         const reader = new FileReader();
-        reader.onload = function () { resolve({ buffer: reader.result, name: file.name, handle: null }); };
-        reader.onerror = function () { reject(reader.error || new Error('Could not read file')); };
+        reader.onload = function () {
+          resolve({ buffer: reader.result, name: file.name, handle: null });
+        };
+        reader.onerror = function () {
+          reject(reader.error || new Error('Could not read file'));
+        };
         reader.readAsArrayBuffer(file);
       };
+
+      document.body.append(input);
+      window.addEventListener('focus', onFocus);
       input.click();
     });
   }
@@ -81,48 +107,76 @@
     return db;
   }
 
+  // Create a brand new .kdbx database with a master password (and optional key file).
+  async function createDatabase(password, name, keyFileBuffer) {
+    if (!password) {
+      throw new Error('Please enter a master password for your new database.');
+    }
+    const dbName = (name && name.trim()) ? name.trim() : 'WebPass Vault';
+    let creds;
+    if (keyFileBuffer) {
+      const kf = kdbxweb.Credentials.fromFile(keyFileBuffer);
+      const pass = kdbxweb.ProtectedValue.fromString(password);
+      creds = new kdbxweb.Credentials(pass, kf);
+    } else {
+      const pass = kdbxweb.ProtectedValue.fromString(password);
+      creds = new kdbxweb.Credentials(pass);
+    }
+    await creds.ready;
+    const db = kdbxweb.Kdbx.create(creds, dbName);
+    return db;
+  }
+
   // Re-encrypt and return the .kdbx bytes.
   async function save(db) {
     return await db.save();
   }
 
-  /* ---- Traversal / field helpers ---- */
+  // KeePass standard field keys mapping between short key and kdbxweb standard field key.
+  const FIELD_MAP = {
+    'T': 'Title',
+    'U': 'UserName',
+    'P': 'Password',
+    'W': 'URL',
+    'N': 'Notes',
+    'A': 'AutoType',
+  };
 
   function defaultGroup(db) { return db.getDefaultGroup(); }
 
   function groupUuid(group) { return uuidStr(group && group.uuid); }
   function entryUuid(entry) { return uuidStr(entry && entry.uuid); }
 
-  // true if `key` (e.g. 'P') is stored as a protected field ('!P').
+  // true if field is stored as a kdbxweb.ProtectedValue.
   function isProtected(entry, key) {
-    return entry && entry.fields && entry.fields.has('!' + key);
+    if (!entry || !entry.fields) return false;
+    const mappedKey = FIELD_MAP[key] || key;
+    const value = entry.fields.get(mappedKey) || entry.fields.get(key);
+    return value instanceof kdbxweb.ProtectedValue;
   }
 
-  // Read a standard field's text ('T','U','P','W','N'). Handles string | ProtectedValue.
+  // Read a standard field's text ('T','U','P','W','N' or full key). Handles string | ProtectedValue.
   function fieldText(entry, key) {
     if (!entry || !entry.fields) return '';
-    const value = entry.fields.get('!' + key) || entry.fields.get(key);
+    const mappedKey = FIELD_MAP[key] || key;
+    const value = entry.fields.get(mappedKey) || entry.fields.get(key) || entry.fields.get('!' + key);
     if (value == null) return '';
     return value instanceof kdbxweb.ProtectedValue ? value.getText() : value;
   }
 
-  // Entry title (T), falling back to a placeholder.
+  // Entry title (T / Title), falling back to a placeholder.
   function entryTitle(entry) {
     const t = fieldText(entry, 'T');
     return t || '(Untitled)';
   }
 
   // List of custom field names (standard keys excluded).
-  // Note: kdbxweb's StringMap yields the *display* name (Title, UserName, ...)
-  // for standard fields rather than the raw key (T, U, ...), so exclude both.
   function customFieldNames(entry) {
     if (!entry || !entry.fields) return [];
-    const DISPLAY_NAMES = new Set(['Title', 'UserName', 'Password', 'URL', 'Notes']);
     const names = [];
     const seen = new Set();
     entry.fields.forEach(function (_, k) {
       if (STANDARD_FIELDS.has(k)) return;
-      if (DISPLAY_NAMES.has(k)) return;
       if (seen.has(k)) return;
       seen.add(k);
       names.push(k);
@@ -132,29 +186,87 @@
 
   // Create a new entry in `group` (assigns a fresh UUID).
   function createEntry(db, group, opts) {
-    return db.createEntry(group, Object.assign({ uuid: true }, opts));
+    const entry = db.createEntry(group);
+    if (opts && typeof opts === 'object') {
+      if (opts.title) setField(entry, 'T', opts.title);
+      if (opts.username) setField(entry, 'U', opts.username);
+      if (opts.password) setField(entry, 'P', opts.password, true);
+      if (opts.url) setField(entry, 'W', opts.url);
+      if (opts.notes) setField(entry, 'N', opts.notes);
+    }
+    return entry;
   }
 
-  // Remove an entry from the database.
+  // Check if an entry or group is inside the Recycle Bin tree.
+  function inRecycleBin(db, entryOrGroup) {
+    if (!db || !entryOrGroup) return false;
+    const recycleUuid = db.meta && db.meta.recycleBinUuid ? uuidStr(db.meta.recycleBinUuid) : null;
+    if (!recycleUuid) return false;
+
+    let g = entryOrGroup.parentGroup || (entryOrGroup.entries ? entryOrGroup : null);
+    while (g) {
+      if (uuidStr(g.uuid) === recycleUuid) return true;
+      g = g.parentGroup;
+    }
+    return false;
+  }
+
+  // Restore an entry from the Recycle Bin to the default group (or root group).
+  function restoreEntry(db, entry) {
+    if (!db || !entry) return;
+    const target = defaultGroup(db) || (db.groups && db.groups[0]) || db.rootGroup;
+    db.move(entry, target);
+  }
+
+  // Permanently delete an entry from the database.
+  function deletePermanently(db, entry) {
+    if (!db || !entry) return;
+    db.move(entry, null);
+  }
+
+  // Remove an entry from the database. Moves to Recycle Bin if enabled and not already in Recycle Bin; otherwise removes permanently.
   function removeEntry(db, entry) {
-    db.remove(entry);
+    if (!db || !entry) return;
+    if (inRecycleBin(db, entry) || !db.meta || !db.meta.recycleBinEnabled) {
+      deletePermanently(db, entry);
+    } else {
+      db.remove(entry);
+    }
   }
 
   // Set a string field. Empty/undefined clears it. Pass isProtected=true to
   // store the value as a ProtectedValue (masked in the UI).
   function setField(entry, key, value, isProtected) {
-    if (value == null || value === '') { entry.fields.delete(key); return; }
-    entry.fields.set(key, isProtected ? kdbxweb.ProtectedValue.fromString(value) : value);
+    if (!entry || !entry.fields) return;
+    const mappedKey = FIELD_MAP[key] || key;
+    if (value == null || value === '') {
+      entry.fields.delete(mappedKey);
+      if (mappedKey !== key) entry.fields.delete(key);
+      return;
+    }
+    const valObj = isProtected ? kdbxweb.ProtectedValue.fromString(value) : value;
+    entry.fields.set(mappedKey, valObj);
+    if (mappedKey !== key && entry.fields.has(key)) {
+      entry.fields.delete(key);
+    }
   }
 
-  // Recursively collect every entry in the database.
+  // Recursively collect every active entry in the database (excluding Recycle Bin entries).
   function allEntries(db) {
     const out = [];
+    const recycleUuid = db && db.meta && db.meta.recycleBinUuid ? uuidStr(db.meta.recycleBinUuid) : null;
+
     function walk(g) {
-      for (const e of g.entries) out.push(e);
-      for (const sub of g.groups) walk(sub);
+      if (!g) return;
+      if (recycleUuid && uuidStr(g.uuid) === recycleUuid) return; // Skip Recycle Bin group
+      if (g.entries) { for (const e of g.entries) out.push(e); }
+      if (g.groups) { for (const sub of g.groups) walk(sub); }
     }
-    walk(defaultGroup(db));
+    if (db && db.rootGroup) {
+      walk(db.rootGroup);
+    } else if (db && db.groups) {
+      for (const top of db.groups) walk(top);
+    }
     return out;
   }
 
@@ -162,20 +274,115 @@
   function findEntryById(db, id) {
     let found = null;
     function walk(g) {
-      if (found) return;
-      for (const e of g.entries) { if (entryUuid(e) === id) { found = e; return; } }
-      for (const sub of g.groups) walk(sub);
+      if (found || !g) return;
+      if (g.entries) {
+        for (const e of g.entries) { if (entryUuid(e) === id) { found = e; return; } }
+      }
+      if (g.groups) {
+        for (const sub of g.groups) walk(sub);
+      }
     }
-    walk(defaultGroup(db));
+    if (db && db.rootGroup) {
+      walk(db.rootGroup);
+    } else if (db && db.groups) {
+      for (const top of db.groups) walk(top);
+    }
     return found;
   }
 
+  // Recursively collect every entry inside a group and its subgroups (skipping Recycle Bin unless explicitly selected).
+  function groupEntries(db, group) {
+    const out = [];
+    if (!group) return out;
+    const recycleUuid = db && db.meta && db.meta.recycleBinUuid ? uuidStr(db.meta.recycleBinUuid) : null;
+    const isSelectedGroupRecycleBin = recycleUuid && groupUuid(group) === recycleUuid;
+
+    function walk(g) {
+      if (!g) return;
+      if (!isSelectedGroupRecycleBin && recycleUuid && uuidStr(g.uuid) === recycleUuid) return;
+      if (g.entries) { for (const e of g.entries) out.push(e); }
+      if (g.groups) { for (const sub of g.groups) walk(sub); }
+    }
+    walk(group);
+    return out;
+  }
+
+  // Find a group by its uuid string.
+  function findGroupById(db, id) {
+    let found = null;
+    function walk(g) {
+      if (found || !g) return;
+      if (groupUuid(g) === id) { found = g; return; }
+      if (g.groups) {
+        for (const sub of g.groups) walk(sub);
+      }
+    }
+    if (db && db.rootGroup) {
+      walk(db.rootGroup);
+    } else if (db && db.groups) {
+      for (const top of db.groups) walk(top);
+    }
+    return found;
+  }
+
+  // Create a new group inside parentGroup (or rootGroup if null).
+  function createGroup(db, parentGroup, name) {
+    if (!db || !name) return null;
+    const parent = parentGroup || defaultGroup(db) || (db.groups && db.groups[0]) || db.rootGroup;
+    if (parent && typeof db.createGroup === 'function') {
+      return db.createGroup(parent, name);
+    }
+    const group = kdbxweb.KdbxGroup.create(name, parent);
+    if (parent && parent.groups) { parent.groups.push(group); }
+    return group;
+  }
+
+  // Move an entry into a target group.
+  function moveEntry(db, entry, targetGroup) {
+    if (!db || !entry || !targetGroup) return;
+    db.move(entry, targetGroup);
+  }
+
+  // Flat list of all active groups (for group selector dropdowns).
+  function getAllGroups(db) {
+    const out = [];
+    const recycleUuid = db && db.meta && db.meta.recycleBinUuid ? uuidStr(db.meta.recycleBinUuid) : null;
+    const root = defaultGroup(db) || (db && db.groups && db.groups[0]) || (db && db.rootGroup);
+    const rootUuid = root ? groupUuid(root) : null;
+
+    function walk(g, prefix) {
+      if (!g) return;
+      const gUuid = groupUuid(g);
+      if (recycleUuid && gUuid === recycleUuid) return; // Skip Recycle Bin
+
+      const isRoot = gUuid === rootUuid;
+      const name = isRoot ? 'Top Level' : (g.name || '(unnamed)');
+      const label = isRoot ? '📁 Top Level' : (prefix ? prefix + ' / ' + name : name);
+
+      out.push({ group: g, uuid: gUuid, label, isRoot });
+
+      if (g.groups) {
+        for (const sub of g.groups) {
+          walk(sub, isRoot ? '' : label);
+        }
+      }
+    }
+
+    if (root) {
+      walk(root, '');
+    } else if (db && db.groups) {
+      for (const top of db.groups) walk(top, '');
+    }
+    return out;
+  }
+
   WP.kdbx = {
-    openFile, openFileFallback, unlock, save,
-    createEntry, removeEntry, setField,
-    defaultGroup, groupUuid, entryUuid,
+    openFile, unlock, save, createDatabase,
+    createEntry, removeEntry, restoreEntry, deletePermanently, inRecycleBin, setField,
+    createGroup, moveEntry, getAllGroups,
+    defaultGroup, groupUuid, entryUuid, uuidStr,
     isProtected, fieldText, entryTitle, customFieldNames,
-    allEntries, findEntryById,
+    allEntries, groupEntries, findEntryById, findGroupById,
     STANDARD_FIELDS,
   };
 })();

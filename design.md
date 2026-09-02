@@ -43,7 +43,7 @@ decrypts the file; nothing is ever stored server-side.
 | State | lightweight custom store (in-memory) | Holds the decrypted database while unlocked |
 | `.kdbx` parsing & crypto | **kdbxweb** (Keeweb) | Decryption / encryption / format parsing in-browser |
 | Crypto backend | kdbxweb (native + WASM) | AES-256 / Twofish, ChaCha20, Argon2id / PBKDF2 / Salsa20 KDF |
-| File I/O | File System Access API + fallback | See §3.3 |
+| File I/O | `<input type=file>` open; IndexedDB cache + download save | See §3.3 |
 | Build | none — static folder | Vendored locally for offline use (see note below) |
 
 > **Offline/USB note:** the app is opened via `file://` (double-click the HTML). Load `kdbxweb` with a
@@ -71,7 +71,7 @@ In-memory Database object (Groups + Entries)
 kdbxweb: re-encrypt database with master key
    │
    ▼
-3.3 Save via File System Access API  (or download fallback)  →  .kdbx file on USB
+  3.3 Save via IndexedDB cache + download export  →  .kdbx on disk / restored from cache
 ```
 
 There is **no server, no database engine, no session**. The SPA is a renderer + editor for the encrypted file.
@@ -89,17 +89,26 @@ This is the biggest portability risk — browser support for direct file access 
 
 | Approach | API | Supported |
 |----------|-----|-----------|
-| **Primary** — open | `window.showOpenFilePicker()` | Chrome/Edge/Opera desktop, recent Android Chrome |
-| **Primary** — save | `window.showSaveFilePicker()` + `FileSystemFileHandle` | Chrome/Edge/Opera desktop, recent Android Chrome |
-| **Fallback** — open | `<input type="file">` | All browsers (incl. Safari/iOS) |
-| **Fallback** — save | `Blob` + `<a download>` | All browsers (incl. Safari/iOS) |
+| **Open** | `<input type="file">` | All browsers (Chrome/Edge/Opera/Firefox desktop, Safari/iOS, older Android, VS Code embedded browser) |
+| **Save** | IndexedDB browser cache (`js/cache.js`) + `Blob` `<a download>` export | All browsers |
 
-- Detect support via feature detection (`window.showSaveFilePicker`); fall back automatically.
-- On Safari/iOS and older Android browsers, the File System Access API is unavailable — the app must
-  **download** the `.kdbx` on save and let the user **re-open** it on next launch. Document this limitation clearly.
-- Always re-encrypt the database before writing; never persist decrypted data to disk or browser storage.
-- **Save atomically:** write the re-encrypted bytes to a temporary file first, then move/rename it over the
-  target. This prevents a corrupted `.kdbx` if the save is interrupted (e.g. USB yanked mid-write).
+We deliberately **do not use the File System Access API** (`showOpenFilePicker`/`showSaveFilePicker`):
+it is unavailable in Firefox, the VS Code embedded browser, and iOS Safari, and requires a secure context
+(HTTPS/localhost) — none of which apply to a `file://` vault opened from a USB stick. This matches the
+approach KeeWeb takes (local files with no cloud storage are saved to the browser cache and exported).
+
+- **Open** via a native `<input type="file">` picker (`kdbx.openFile`). It resolves `{ buffer, name, handle }`
+  where `handle` is always `null` (no FSA handle).
+- **Save** (`save.saveDb`) does two things:
+  1. writes the re-encrypted `.kdbx` bytes to the IndexedDB **browser cache** (`cache.save`) — durable across
+     page reloads, so a reload can restore the last vault without re-picking the file (see `unlock.js`
+     "Recently saved");
+  2. exports a **Blob download** so the current state lands on disk.
+- The decrypted db stays live in memory (`store.state.db`) for the session, so you never have to re-open
+  after a save. `markDirty(false)` clears the dirty flag once saved to the cache.
+- Always re-encrypt the database before caching/downloading; never persist decrypted data to the cache,
+  disk, or browser storage.
+- Cache writes are best-effort: if `cache.save` fails (e.g. quota), the download export still runs.
 
 ---
 
@@ -218,7 +227,7 @@ App
 | Corrupt / unsupported `.kdbx` | Show clear "could not open file" with reason (bad version, bad key) |
 | Wrong master password | Show generic unlock failure; do not reveal which is wrong |
 | Unsupported file type | Reject non-`.kdbx` files at the picker |
-| Save blocked (e.g. no File System Access API) | Fall back to download; explain the re-open step |
+| Save blocked (e.g. cache unavailable) | Still export a download; changes are lost on reload if neither saved |
 | File modified externally | Detect dirty state, prompt to discard or reload |
 | Very large database | Show progress while decrypting; avoid blocking UI |
 
@@ -240,14 +249,14 @@ App
 - [ Build with current browser capabilites. Browsers more than a 2 years old can be dropped] Minimum target browsers/OS (drives how much fallback UX we must build)?
 - [Yes ] Support **key files** in addition to master password?
 - [4.x and 3.x ] KDBX 4.x and 3.x both supported.
-- [Auto-lock ~10 min; USB removed → treat as lock] Auto-lock timeout default and USB-removed behavior (recommended — confirm). The save-to-temp strategy is captured in §3.3.
+- [Auto-lock ~10 min; USB removed → treat as lock] Auto-lock timeout default and USB-removed behavior (recommended — confirm). The cache-and-export save strategy is captured in §3.3.
 - [Length 16; upper + lower + digits; exclude ambiguous chars] Password generator defaults (length, character sets, exclusions)? (recommended — confirm)
 
 ---
 
 ## 10. Milestones / Phases
 1. **M1** — `.kdbx` load + unlock: open file, derive key, decrypt, render group/entry tree (kdbxweb wired up).
-2. **M2** — Save: File System Access API + download fallback round-trip.
+2. **M2** — Save: `<input type=file>` open + IndexedDB cache and download-export round-trip (KeeWeb model).
 3. **M3** — CRUD: create / edit / delete entries and custom fields.
 4. **M4** — Password generation + protected-field masking + clipboard clearing.
 5. **M5** — Locking/inactivity, error handling, cross-browser polish, USB portability testing.

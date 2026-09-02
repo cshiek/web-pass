@@ -36,11 +36,8 @@
   function clearMemory() {
     stopTracking();
     clearClipboardNow();
-    // Drop the decrypted database from memory so plaintext credentials are not
-    // lingering while locked (design.md §5.3).
-    STORE.state.db = null;
-    STORE.state.header = null;
-    STORE.state.locked = true;
+    // Drop the decrypted database and reset session state completely (design.md §5.3).
+    STORE.lock();
   }
 
   function stopTracking() {
@@ -105,14 +102,9 @@
 
   // Bootstrap: wire the one-time global session events.
   function init() {
-    document.addEventListener('visibilitychange', function () {
-      if (document.visibilityState !== 'hidden') return;
-      suspend();
-      if (typeof location !== 'undefined' && location.hash !== '#/') {
-        location.hash = '#/';
-      }
-    });
+    // Wipe decrypted memory if the page is closed / torn down.
     window.addEventListener('pagehide', suspend);
+    // Warn before leaving with unsaved changes.
     window.addEventListener('beforeunload', guardUnsaved);
   }
 
