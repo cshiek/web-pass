@@ -123,10 +123,14 @@ Navigate to `http://localhost:8080` in your web browser.
 - Click **Save Vault** in the top navigation header (or press <kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Cmd</kbd>+<kbd>S</kbd>).
 - WebPass re-encrypts the vault, updates your browser cache, and exports the updated `.kdbx` file to your downloads folder.
 
----
-
 ## 🛡️ Security Philosophy
 
 - **Zero Server Overhead**: Secrets never leave your browser context. All encryption and key derivations run client-side.
 - **Memory Hygiene**: Upon locking, all decrypted in-memory database structures and keys are wiped from JavaScript memory.
 - **No Remote Telemetry**: Zero tracking scripts, analytics, or third-party external network requests.
+
+---
+
+## 📜 Attributions & Open Source
+
+WebPass relies on open-source libraries and standards, including `kdbxweb`, `argon2-browser`, KeeWeb, and KeePass. For full details and licensing information, see [attributions.md](attributions.md).
