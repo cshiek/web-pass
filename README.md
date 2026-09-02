@@ -14,6 +14,7 @@ It requires **no installation, no cloud backend, no account registration, and no
 - **Vertical Group Tree**: Organize entries in nestable folders with collapsible/expandable parent nodes.
 - **Top-Level Unpacking**: Clean sidebar hierarchy displaying top-level groups directly under **📁 All Entries**.
 - **`+ Group` Creation Modal**: Create new groups anywhere in the database hierarchy with automatic folder expansion and selection.
+- **✏️ Rename & 🗑️ Delete Groups**: Hover over any user group in the sidebar to reveal quick action controls. Rename folders via an inline modal, or delete folders with automatic safety migration (moving contained entries to the Recycle Bin).
 - **Move Entries Between Groups**: Easily reassign entries to any group in your database directly from the entry editor.
 
 ### 🗑️ Recycle Bin & Entry Restoration
@@ -21,7 +22,10 @@ It requires **no installation, no cloud backend, no account registration, and no
 - **Origin Group Badges**: Recycled items display origin badges (e.g. `🗑️ Recycle Bin (Shopping)`) so you know exactly where an entry was deleted from.
 - **Restore & Permanent Delete**: Restore deleted entries back to their original parent group or permanently purge them.
 
-### ⚡ Entry Editing & Credentials
+### ⚡ Entry Editing, Credentials & CSV Import
+- **📥 Import Passwords from CSV**: Import credentials from Chrome, Bitwarden, 1Password, LastPass, KeePass, Safari, Dashlane, and generic CSV files.
+- **Interactive Column Mapping**: Built-in RFC 4180 CSV parser with auto-detected headers and manual column override options (Title, Username, Password, URL, Notes, Group).
+- **Auto Group Creation**: Automatically parses group/folder columns in CSV files and creates nested subgroups inside your chosen parent group.
 - **Complete Entry Editor**: Modify Title, Username, Password, URL, Notes, and arbitrary Custom Fields.
 - **Instant Search**: Real-time filtering across titles, usernames, URLs, and notes.
 - **Origin Group Pills**: Entries rendered in search results or "All Entries" view show styled `📁 GroupName` pills next to their titles.
@@ -31,7 +35,7 @@ It requires **no installation, no cloud backend, no account registration, and no
 ### 🔒 Security & Persistence
 - **100% Client-Side Cryptography**: Powered by `kdbxweb` with WebAssembly/native Argon2id and Web Crypto API. Decryption occurs strictly in-memory.
 - **IndexedDB Session Cache**: Re-encrypted vaults persist in the browser's IndexedDB cache so page reloads do not require re-opening the file from disk.
-- **Automatic Export Downloads**: Saving updates the local session cache and exports a fresh `.kdbx` file download to your device.
+- **Native `.kdbx` File Pickers**: Both Open and Save dialogs utilize explicit File System Access API types (`description: 'KeePass KDBX Database (*.kdbx)'`, `accept: { 'application/x-kdbx': ['.kdbx'] }`), ensuring file dialogs strictly filter to `.kdbx` files and append `.kdbx` extensions automatically.
 - **Inactivity Auto-Lock**: Automatically locks the vault after 10 minutes of inactivity or manual lock button click.
 
 ---

@@ -30,20 +30,41 @@
     URL.revokeObjectURL(url);
   }
 
-  // Re-encrypt the in-memory db, persist it to the browser cache, and export a
-  // download. Returns { method: 'cache' }.
+  // Re-encrypt the in-memory db, persist it to the browser cache, and write
+  // directly back to the file handle or export a single download.
   async function saveDb(db) {
     const buffer = await kdbx.save(db);
-    const name = store.state.fileName || 'database.kdbx';
+    let name = store.state.fileName || 'database.kdbx';
+    if (!name.toLowerCase().endsWith('.kdbx')) {
+      name += '.kdbx';
+    }
+
     try {
       await cache.save(name, buffer);
     } catch (e) {
-      // Cache write failed (e.g. quota). The download below still exports, so
-      // this is best-effort rather than fatal.
+      // Cache write best-effort
     }
+
+    let savedNative = false;
+    const handle = store.state.handle || store.state.fileHandle;
+
+    if (handle && typeof handle.createWritable === 'function') {
+      try {
+        const writable = await handle.createWritable();
+        await writable.write(buffer);
+        await writable.close();
+        savedNative = true;
+      } catch (err) {
+        console.warn('Direct file handle write failed:', err);
+      }
+    }
+
+    if (!savedNative) {
+      download(buffer, name);
+    }
+
     store.markDirty(false);
-    download(buffer, name);
-    return { method: 'cache' };
+    return { method: savedNative ? 'file' : 'download' };
   }
 
   WP.save = { saveDb, download };

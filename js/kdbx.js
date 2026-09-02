@@ -23,17 +23,21 @@
   // embedded browser, iOS Safari). `handle` is null, so save() writes to the
   // browser cache and exports via download instead of overwriting the source
   // file (the KeeWeb model — a file:// page can't write back to the USB .kdbx).
+  // Open a .kdbx via native file picker with .kdbx extension filter.
   function openFile() {
     return new Promise(function (resolve, reject) {
       const input = document.createElement('input');
       input.type = 'file';
-      input.accept = '.kdbx,application/x-kdbx';
+      input.accept = '.kdbx';
       input.multiple = false;
+      input.style.display = 'none';
 
       let handled = false;
+
       function cleanup() {
-        if (input.parentNode) input.parentNode.removeChild(input);
-        window.removeEventListener('focus', onFocus);
+        if (input.parentNode) {
+          input.parentNode.removeChild(input);
+        }
       }
 
       function onCancel() {
@@ -45,21 +49,18 @@
         reject(err);
       }
 
-      function onFocus() {
-        setTimeout(function () {
-          if (!handled && (!input.files || input.files.length === 0)) {
-            onCancel();
-          }
-        }, 300);
-      }
-
       input.oncancel = onCancel;
+
       input.onchange = function () {
         if (handled) return;
         const file = input.files && input.files[0];
-        if (!file) { onCancel(); return; }
+        if (!file) {
+          onCancel();
+          return;
+        }
         handled = true;
         cleanup();
+
         const reader = new FileReader();
         reader.onload = function () {
           resolve({ buffer: reader.result, name: file.name, handle: null });
@@ -71,7 +72,6 @@
       };
 
       document.body.append(input);
-      window.addEventListener('focus', onFocus);
       input.click();
     });
   }
@@ -337,6 +337,73 @@
     return group;
   }
 
+  function getOrCreateGroupByName(db, parentGroup, name) {
+    if (!db || !name) return parentGroup;
+    const parent = parentGroup || defaultGroup(db) || (db.groups && db.groups[0]);
+    const cleanName = name.trim();
+    if (!cleanName) return parent;
+
+    if (parent && parent.groups) {
+      for (const g of parent.groups) {
+        if (g.name && g.name.toLowerCase() === cleanName.toLowerCase()) {
+          return g;
+        }
+      }
+    }
+    return createGroup(db, parent, cleanName) || parent;
+  }
+
+  // Rename an existing group.
+  function renameGroup(db, group, newName) {
+    if (!group || !newName || !newName.trim()) {
+      throw new Error('Group name cannot be empty.');
+    }
+    const recycleUuid = db && db.meta && db.meta.recycleBinUuid ? uuidStr(db.meta.recycleBinUuid) : null;
+    if (recycleUuid && groupUuid(group) === recycleUuid) {
+      throw new Error('Cannot rename the Recycle Bin.');
+    }
+    group.name = newName.trim();
+    if (group.times) group.times.update();
+  }
+
+  // Delete a group, moving its entries into the Recycle Bin.
+  function deleteGroup(db, group) {
+    if (!db || !group) return;
+    const gUuid = groupUuid(group);
+    const recycleUuid = db.meta && db.meta.recycleBinUuid ? uuidStr(db.meta.recycleBinUuid) : null;
+
+    if (recycleUuid && gUuid === recycleUuid) {
+      throw new Error('Cannot delete the Recycle Bin.');
+    }
+
+    const root = defaultGroup(db) || (db.groups && db.groups[0]) || db.rootGroup;
+    if (root && groupUuid(root) === gUuid) {
+      throw new Error('Cannot delete the Top Level root group.');
+    }
+
+    // Move all contained entries (recursive) to Recycle Bin
+    const entries = groupEntries(group, true);
+    entries.forEach(function (entry) {
+      removeEntry(db, entry);
+    });
+
+    // Remove group from parent's groups list
+    const parent = group.parentGroup || root;
+    if (parent && parent.groups) {
+      const idx = parent.groups.indexOf(group);
+      if (idx !== -1) {
+        parent.groups.splice(idx, 1);
+      } else {
+        for (let i = 0; i < parent.groups.length; i++) {
+          if (groupUuid(parent.groups[i]) === gUuid) {
+            parent.groups.splice(i, 1);
+            break;
+          }
+        }
+      }
+    }
+  }
+
   // Move an entry into a target group.
   function moveEntry(db, entry, targetGroup) {
     if (!db || !entry || !targetGroup) return;
@@ -379,7 +446,7 @@
   WP.kdbx = {
     openFile, unlock, save, createDatabase,
     createEntry, removeEntry, restoreEntry, deletePermanently, inRecycleBin, setField,
-    createGroup, moveEntry, getAllGroups,
+    createGroup, renameGroup, deleteGroup, getOrCreateGroupByName, moveEntry, getAllGroups,
     defaultGroup, groupUuid, entryUuid, uuidStr,
     isProtected, fieldText, entryTitle, customFieldNames,
     allEntries, groupEntries, findEntryById, findGroupById,

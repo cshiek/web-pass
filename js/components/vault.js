@@ -19,6 +19,9 @@
     const newBtn = ui.el('button', { class: 'btn btn-ghost', id: 'new-btn' }, '+ New');
     newBtn.onclick = newEntry;
 
+    const importBtn = ui.el('button', { class: 'btn btn-ghost', id: 'import-btn' }, '📥 Import CSV');
+    importBtn.onclick = function () { openCsvImportModal(db); };
+
     const saveBtn = ui.el('button', { class: 'btn btn-primary', id: 'save-btn' }, '💾 Save');
     saveBtn.onclick = save;
 
@@ -27,6 +30,7 @@
       ui.el('span', { class: 'file-name' }, store.state.fileName || ''),
       ui.el('span', { class: 'count', id: 'entry-count' }, ''),
       newBtn,
+      importBtn,
       saveBtn,
       lockBtn,
     ]);
@@ -167,7 +171,22 @@
       renderEntries(searchValue());
     };
 
-    const headerItem = ui.el('div', { class: 'tree-item' }, [toggle, label]);
+    const renameBtn = ui.el('button', { class: 'tree-action-btn', title: 'Rename group' }, '✏️');
+    renameBtn.onclick = function (e) {
+      e.stopPropagation();
+      e.preventDefault();
+      openRenameGroupModal(db, group);
+    };
+
+    const deleteBtn = ui.el('button', { class: 'tree-action-btn', title: 'Delete group' }, '🗑️');
+    deleteBtn.onclick = function (e) {
+      e.stopPropagation();
+      e.preventDefault();
+      confirmDeleteGroup(db, group);
+    };
+
+    const actions = ui.el('div', { class: 'tree-item-actions' }, [renameBtn, deleteBtn]);
+    const headerItem = ui.el('div', { class: 'tree-item' }, [toggle, label, actions]);
 
     const children = ui.el('div', { class: 'tree-children' });
     if (!expanded || !hasChildren) {
@@ -669,6 +688,346 @@
     nameInput.onkeydown = function (e) { if (e.key === 'Enter') submit(); };
   }
 
+  function openRenameGroupModal(db, group) {
+    const nameInput = ui.el('input', { type: 'text', class: 'editor-field', value: group.name || '', placeholder: 'Group name', style: 'margin-top: 6px;' });
+    const saveBtn = ui.el('button', { class: 'btn btn-primary' }, 'Save Name');
+    const cancelBtn = ui.el('button', { class: 'btn btn-ghost' }, 'Cancel');
+
+    function close() {
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+      document.removeEventListener('keydown', onKey);
+    }
+    function onKey(e) { if (e.key === 'Escape') close(); }
+
+    function submit() {
+      const name = nameInput.value.trim();
+      if (!name) { toast('Group name cannot be empty.'); return; }
+      try {
+        kdbx.renameGroup(db, group, name);
+        store.markDirty(true);
+        close();
+        toast('Group renamed to "' + name + '".');
+        renderTree();
+        renderEntries();
+      } catch (err) {
+        toast('Error renaming group: ' + (err.message || String(err)));
+      }
+    }
+
+    saveBtn.onclick = submit;
+    cancelBtn.onclick = close;
+
+    const overlay = ui.el('div', { class: 'modal-overlay' }, [
+      ui.el('div', { class: 'modal', style: 'max-width: 360px; width: 100%;' }, [
+        ui.el('div', { class: 'modal-head' }, [
+          ui.el('span', { class: 'modal-title' }, '✏️ Rename Group'),
+          cancelBtn,
+        ]),
+        ui.el('div', { class: 'modal-body', style: 'padding: 16px 0;' }, [
+          ui.el('div', { class: 'field' }, [
+            ui.el('label', { class: 'small muted', style: 'font-weight: 600;' }, 'Group Name'),
+            nameInput,
+          ]),
+        ]),
+        ui.el('div', { class: 'modal-actions', style: 'display: flex; justify-content: flex-end; gap: 8px;' }, [
+          cancelBtn, saveBtn
+        ]),
+      ]),
+    ]);
+
+    document.body.append(overlay);
+    document.addEventListener('keydown', onKey);
+    overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+    setTimeout(function () { nameInput.focus(); nameInput.select(); }, 50);
+    nameInput.onkeydown = function (e) { if (e.key === 'Enter') submit(); };
+  }
+
+  function confirmDeleteGroup(db, group) {
+    const entriesInGrp = kdbx.groupEntries(db, group, true);
+    const count = entriesInGrp ? entriesInGrp.length : 0;
+    const msg = 'Are you sure you want to delete group "' + (group.name || 'this group') + '"?' +
+      (count > 0 ? '\n\n' + count + ' entry/entries inside will be moved to the Recycle Bin.' : '');
+
+    if (!confirm(msg)) return;
+
+    try {
+      const gUuid = kdbx.groupUuid(group);
+      const isSelected = store.state.selectedGroupId === gUuid;
+
+      kdbx.deleteGroup(db, group);
+      store.markDirty(true);
+
+      if (isSelected) {
+        store.update({ selectedGroupId: null });
+      }
+
+      toast('Group "' + (group.name || '') + '" deleted.');
+      renderTree();
+      renderEntries();
+    } catch (err) {
+      toast('Error deleting group: ' + (err.message || String(err)));
+    }
+  }
+
+  function parseCsv(text) {
+    const lines = [];
+    let row = [];
+    let field = '';
+    let inQuotes = false;
+
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      const next = text[i + 1];
+
+      if (inQuotes) {
+        if (c === '"' && next === '"') {
+          field += '"';
+          i++;
+        } else if (c === '"') {
+          inQuotes = false;
+        } else {
+          field += c;
+        }
+      } else {
+        if (c === '"') {
+          inQuotes = true;
+        } else if (c === ',') {
+          row.push(field);
+          field = '';
+        } else if (c === '\r') {
+          if (next === '\n') i++;
+          row.push(field);
+          lines.push(row);
+          row = [];
+          field = '';
+        } else if (c === '\n') {
+          row.push(field);
+          lines.push(row);
+          row = [];
+          field = '';
+        } else {
+          field += c;
+        }
+      }
+    }
+    if (field || row.length > 0) {
+      row.push(field);
+      lines.push(row);
+    }
+    return lines.filter(function (r) {
+      return r.some(function (cell) { return cell.trim() !== ''; });
+    });
+  }
+
+  function mapCsvHeaders(headers) {
+    const map = { title: -1, username: -1, password: -1, url: -1, notes: -1, group: -1 };
+    headers.forEach(function (h, idx) {
+      const clean = h.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (map.title === -1 && ['title', 'name', 'account', 'loginname', 'entryname', 'itemname'].indexOf(clean) !== -1) map.title = idx;
+      if (map.username === -1 && ['username', 'user', 'email', 'login', 'loginusername', 'userid'].indexOf(clean) !== -1) map.username = idx;
+      if (map.password === -1 && ['password', 'pass', 'secret', 'loginpassword'].indexOf(clean) !== -1) map.password = idx;
+      if (map.url === -1 && ['url', 'website', 'web', 'link', 'loginuri', 'uri'].indexOf(clean) !== -1) map.url = idx;
+      if (map.notes === -1 && ['notes', 'note', 'comments', 'comment', 'description', 'extra'].indexOf(clean) !== -1) map.notes = idx;
+      if (map.group === -1 && ['group', 'folder', 'category', 'groupname', 'foldername'].indexOf(clean) !== -1) map.group = idx;
+    });
+
+    if (map.title === -1 && headers.length > 0) map.title = 0;
+    if (map.password === -1 && headers.length > 1) {
+      for (let i = 0; i < headers.length; i++) {
+        if (i !== map.title && i !== map.username && i !== map.url) { map.password = i; break; }
+      }
+    }
+    return map;
+  }
+
+  function openCsvImportModal(db) {
+    const fileInput = ui.el('input', { type: 'file', accept: '.csv,text/csv,text/plain', class: 'hidden-input' });
+    const selectFileBtn = ui.el('button', { class: 'btn btn-primary', style: 'width: 100%; margin-top: 10px;' }, '📄 Select CSV File');
+    const cancelBtn = ui.el('button', { class: 'btn btn-ghost' }, 'Cancel');
+    const importBtn = ui.el('button', { class: 'btn btn-primary', style: 'display: none;' }, 'Import Entries');
+
+    const statusEl = ui.el('div', { class: 'muted small', style: 'margin-top: 10px; font-weight: 500;' }, 'Select a CSV export file from Chrome, Bitwarden, 1Password, LastPass, KeePass, etc.');
+
+    const recycleUuid = db.meta && db.meta.recycleBinUuid ? kdbx.uuidStr(db.meta.recycleBinUuid) : null;
+    const allGroups = kdbx.getAllGroups(db);
+    const parentSelect = ui.el('select', { class: 'editor-field', style: 'margin-top: 6px;' });
+
+    const currentSelectedId = store.state.selectedGroupId;
+    for (const gInfo of allGroups) {
+      const opt = ui.el('option', { value: gInfo.uuid }, gInfo.label);
+      if (currentSelectedId) {
+        if (gInfo.uuid === currentSelectedId) opt.selected = true;
+      } else {
+        if (gInfo.isRoot) opt.selected = true;
+      }
+      parentSelect.append(opt);
+    }
+
+    const mappingContainer = ui.el('div', { style: 'display: none; flex-direction: column; gap: 8px; margin-top: 12px;' });
+
+    let parsedRows = [];
+    let csvHeaders = [];
+    let detectedMapping = {};
+
+    function close() {
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+      document.removeEventListener('keydown', onKey);
+    }
+    function onKey(e) { if (e.key === 'Escape') close(); }
+
+    selectFileBtn.onclick = function () { fileInput.click(); };
+
+    fileInput.onchange = function () {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function (e) {
+        try {
+          const text = e.target.result;
+          const rows = parseCsv(text);
+          if (rows.length < 2) {
+            statusEl.textContent = '❌ CSV file appears empty or has no data rows.';
+            statusEl.style.color = 'var(--danger, #ef4444)';
+            return;
+          }
+
+          csvHeaders = rows[0];
+          parsedRows = rows.slice(1);
+          detectedMapping = mapCsvHeaders(csvHeaders);
+
+          statusEl.textContent = '✓ Found ' + parsedRows.length + ' entries in "' + file.name + '". Verify column mapping below:';
+          statusEl.style.color = 'var(--accent, #3b82f6)';
+
+          selectFileBtn.style.display = 'none';
+          importBtn.style.display = 'inline-block';
+          importBtn.textContent = 'Import ' + parsedRows.length + ' Entries';
+
+          renderMappingSelectors();
+        } catch (err) {
+          console.error('CSV parse error:', err);
+          statusEl.textContent = '❌ Failed to parse CSV: ' + (err.message || String(err));
+          statusEl.style.color = 'var(--danger, #ef4444)';
+        }
+      };
+      reader.readAsText(file);
+    };
+
+    function renderMappingSelectors() {
+      ui.clear(mappingContainer);
+      mappingContainer.style.display = 'flex';
+
+      const fields = [
+        { key: 'title', label: 'Title / Account Name' },
+        { key: 'username', label: 'Username / Email' },
+        { key: 'password', label: 'Password' },
+        { key: 'url', label: 'Website / URL' },
+        { key: 'notes', label: 'Notes' },
+        { key: 'group', label: 'Group / Folder (Optional)' },
+      ];
+
+      fields.forEach(function (f) {
+        const sel = ui.el('select', { class: 'editor-field', style: 'padding: 4px 8px; font-size: 12px;' });
+        const noneOpt = ui.el('option', { value: '-1' }, '-- Ignore --');
+        sel.append(noneOpt);
+
+        csvHeaders.forEach(function (h, idx) {
+          const opt = ui.el('option', { value: String(idx) }, h.trim() || ('Column ' + (idx + 1)));
+          if (detectedMapping[f.key] === idx) opt.selected = true;
+          sel.append(opt);
+        });
+
+        sel.onchange = function () {
+          detectedMapping[f.key] = parseInt(sel.value, 10);
+        };
+
+        const row = ui.el('div', { style: 'display: flex; justify-content: space-between; align-items: center; gap: 8px;' }, [
+          ui.el('span', { class: 'small muted', style: 'min-width: 140px;' }, f.label),
+          sel,
+        ]);
+        mappingContainer.append(row);
+      });
+    }
+
+    importBtn.onclick = function () {
+      if (!parsedRows || parsedRows.length === 0) return;
+      importBtn.disabled = true;
+      importBtn.textContent = 'Importing…';
+
+      try {
+        let defaultParentGrp = kdbx.findGroupById(db, parentSelect.value);
+        if (!defaultParentGrp || (recycleUuid && kdbx.groupUuid(defaultParentGrp) === recycleUuid)) {
+          defaultParentGrp = kdbx.defaultGroup(db) || (db.groups && db.groups[0]);
+        }
+
+        let importedCount = 0;
+        parsedRows.forEach(function (row) {
+          const getVal = function (idxKey) {
+            const idx = detectedMapping[idxKey];
+            if (idx != null && idx >= 0 && idx < row.length) {
+              return (row[idx] || '').trim();
+            }
+            return '';
+          };
+
+          const title = getVal('title') || 'Imported Entry';
+          const username = getVal('username');
+          const password = getVal('password');
+          const url = getVal('url');
+          const notes = getVal('notes');
+          const grpName = getVal('group');
+
+          let targetGroup = defaultParentGrp;
+          if (grpName) {
+            targetGroup = kdbx.getOrCreateGroupByName(db, defaultParentGrp, grpName);
+          }
+
+          kdbx.createEntry(db, targetGroup, { title, username, password, url, notes });
+          importedCount++;
+        });
+
+        store.markDirty(true);
+        close();
+        toast('Successfully imported ' + importedCount + ' entries!');
+        renderTree();
+        renderEntries();
+      } catch (err) {
+        console.error('Import failed:', err);
+        toast('Error importing CSV: ' + (err.message || String(err)));
+        importBtn.disabled = false;
+        importBtn.textContent = 'Import ' + parsedRows.length + ' Entries';
+      }
+    };
+
+    cancelBtn.onclick = close;
+
+    const overlay = ui.el('div', { class: 'modal-overlay' }, [
+      ui.el('div', { class: 'modal', style: 'max-width: 480px; width: 100%;' }, [
+        ui.el('div', { class: 'modal-head' }, [
+          ui.el('span', { class: 'modal-title' }, '📥 Import Passwords from CSV'),
+          cancelBtn,
+        ]),
+        ui.el('div', { class: 'modal-body', style: 'display: flex; flex-direction: column; gap: 10px; padding: 16px 0; max-height: 70vh; overflow-y: auto;' }, [
+          statusEl,
+          selectFileBtn,
+          fileInput,
+          ui.el('div', { class: 'field', style: 'margin-top: 8px;' }, [
+            ui.el('label', { class: 'small muted', style: 'font-weight: 600;' }, 'Target Parent Group'),
+            parentSelect,
+          ]),
+          mappingContainer,
+        ]),
+        ui.el('div', { class: 'modal-actions', style: 'margin-top: 16px; display: flex; justify-content: flex-end; gap: 8px;' }, [
+          cancelBtn, importBtn
+        ]),
+      ]),
+    ]);
+
+    document.body.append(overlay);
+    document.addEventListener('keydown', onKey);
+    overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+  }
+
   /* ---- CRUD actions ---- */
 
   function newEntry() {
@@ -700,8 +1059,14 @@
     btn.disabled = true;
     btn.textContent = 'Saving…';
     try {
-      await WP.save.saveDb(store.state.db);
-      toast('Saved — changes kept in the vault. A copy was also downloaded.');
+      const res = await WP.save.saveDb(store.state.db);
+      if (res && res.method === 'cancelled') {
+        toast('Save cancelled.');
+      } else if (res && res.method === 'file') {
+        toast('Vault saved successfully!');
+      } else {
+        toast('Vault saved & exported.');
+      }
     } catch (e) {
       toast('Save failed: ' + (e && e.message ? e.message : e));
     } finally {
