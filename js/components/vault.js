@@ -14,7 +14,7 @@
     const search = ui.el('input', { type: 'text', id: 'search', placeholder: 'Search title, username, website', autocomplete: 'off' });
 
     const lockBtn = ui.el('button', { class: 'btn btn-ghost', id: 'lock-btn' }, '🔒 Lock');
-    lockBtn.onclick = lock;
+    lockBtn.onclick = function () { WP.session.lock(); };
 
     const newBtn = ui.el('button', { class: 'btn btn-ghost', id: 'new-btn' }, '+ New');
     newBtn.onclick = newEntry;
@@ -63,6 +63,10 @@
 
     renderTree();
     renderEntries('');
+
+    // Inactivity auto-lock: wipe the vault after a period of no interaction.
+    WP.session.arm(function () { location.hash = '#/'; });
+
     return root;
   }
 
@@ -453,33 +457,6 @@
 
   /* ---- Helpers ---- */
 
-  // Pending clipboard-clear timer (30s after a sensitive copy).
-  let clipboardClearTimer = null;
-  const CLEAR_AFTER_MS = 30000;
-
-  function lock() {
-    if (clipboardClearTimer) {
-      clearTimeout(clipboardClearTimer);
-      clipboardClearTimer = null;
-    }
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText('').catch(function () {});
-    }
-    store.lock();
-    location.hash = '#/';
-  }
-
-  // Wipe the clipboard after a delay. Coalesces rapid copies into one timer.
-  function scheduleClipboardClear() {
-    if (clipboardClearTimer) clearTimeout(clipboardClearTimer);
-    clipboardClearTimer = setTimeout(function () {
-      clipboardClearTimer = null;
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText('').catch(function () {});
-      }
-    }, CLEAR_AFTER_MS);
-  }
-
   async function save() {
     const btn = document.getElementById('save-btn');
     btn.disabled = true;
@@ -514,7 +491,7 @@
     opts = opts || {};
     return new Promise(function (resolve) {
       doCopy(text).then(function (ok) {
-        if (ok && opts.sensitive) scheduleClipboardClear();
+        if (ok && opts.sensitive) WP.session.scheduleClipboardClear();
         resolve(ok);
       });
     });

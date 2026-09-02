@@ -27,5 +27,9 @@
     ]);
   });
 
+  // Wire one-time session lifecycle events (auto-lock on tab hidden,
+  // unsaved-changes guard, page-close cleanup).
+  WP.session.init();
+
   router.start();
 })();
