@@ -13,6 +13,7 @@
       handle: null,        // FileSystemFileHandle (enables atomic save) or null
       selectedGroupId: null,
       expanded: {},        // { [uuid]: true }
+      dirty: false,        // in-memory db differs from what's on disk
     };
   }
 
@@ -20,6 +21,8 @@
     state: fresh(),
 
     update(patch) { Object.assign(this.state, patch); },
+
+    markDirty(dirty) { this.state.dirty = !!dirty; },
 
     lock() { this.state = fresh(); },
 

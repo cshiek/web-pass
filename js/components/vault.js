@@ -16,10 +16,14 @@
     const lockBtn = ui.el('button', { class: 'btn btn-ghost', id: 'lock-btn' }, '🔒 Lock');
     lockBtn.onclick = lock;
 
+    const saveBtn = ui.el('button', { class: 'btn btn-primary', id: 'save-btn' }, '💾 Save');
+    saveBtn.onclick = save;
+
     const header = ui.el('header', { class: 'vault-header' }, [
       ui.el('span', { class: 'brand' }, 'WebPass'),
       ui.el('span', { class: 'file-name' }, store.state.fileName || ''),
       ui.el('span', { class: 'count', id: 'entry-count' }, ''),
+      saveBtn,
       lockBtn,
     ]);
 
@@ -209,6 +213,23 @@
   function lock() {
     store.lock();
     location.hash = '#/';
+  }
+
+  async function save() {
+    const btn = document.getElementById('save-btn');
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+    try {
+      const result = await WP.save.saveDb(store.state.db);
+      toast(result.method === 'fsa'
+        ? 'Saved to ' + store.state.fileName
+        : 'Downloaded — reopen it to keep working');
+    } catch (e) {
+      toast('Save failed: ' + (e && e.message ? e.message : e));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '💾 Save';
+    }
   }
 
   function searchValue() {
