@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebPass</title>
+  <link rel="stylesheet" href="css/style.css">
+  <!--
+    Content-Safety-Policy note:
+    This app is meant to be opened via file:// from a USB stick. A strict CSP meta
+    tag would break local script loading, so none is set here. If you later serve
+    the app over HTTP, add a CSP that includes wasm-unsafe-eval (argon2 uses WASM):
+      <meta http-equiv="Content-Safety-Policy" content="wasm-unsafe-eval; script-src 'self'; ...">
+  -->
+</head>
+<body>
+  <div id="app"></div>
+
+  <!-- argon2 (self-contained WASM build) -- must exist before kdbxweb derives a KDBX4 key -->
+  <script src="js/lib/argon2-bundled.min.js"></script>
+  <!-- kdbxweb (global build) -->
+  <script src="js/lib/kdbxweb.min.js"></script>
+  <!-- wire argon2 into kdbxweb BEFORE any database is loaded -->
+  <script src="js/argon2-setup.js"></script>
+  <!-- app modules (load order follows dependencies) -->
+  <script>window.WP = window.WP || {};</script>
+  <script src="js/ui.js"></script>
+  <script src="js/store.js"></script>
+  <script src="js/router.js"></script>
+  <script src="js/kdbx.js"></script>
+  <script src="js/components/unlock.js"></script>
+  <script src="js/components/vault.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
