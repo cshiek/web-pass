@@ -45,7 +45,15 @@
       const btn = e.target.closest('[data-copy]');
       if (btn) {
         e.preventDefault();
-        copyToClipboard(btn.dataset.copy).then(function (ok) { toast(ok ? 'Copied to clipboard' : 'Copy failed'); });
+        const field = btn.dataset.field;
+        copyToClipboard(btn.dataset.copy, { sensitive: field === 'password' || field === 'username' })
+          .then(function (ok) {
+            if (ok && btn.dataset.field === 'password') {
+              toast('Copied — clears in 30s');
+            } else {
+              toast(ok ? 'Copied to clipboard' : 'Copy failed');
+            }
+          });
         return;
       }
       const card = e.target.closest('.entry');
@@ -141,11 +149,11 @@
     ]);
 
     const rows = [
-      fieldRow('Username', username, username && copyBtn(username, 'Copy')),
+      fieldRow('Username', username, username && copyBtn(username, 'Copy', 'username')),
     ];
     rows.push(fieldRow('Password',
       password ? ui.el('span', { class: 'value masked' }, '••••••••') : ui.el('span', { class: 'value muted' }, '—'),
-      password && copyBtn(password, 'Copy')));
+      password && copyBtn(password, 'Copy', 'password')));
     if (website) {
       rows.push(fieldRow('Website',
         ui.el('a', { class: 'value', href: ensureUrl(website), target: '_blank', rel: 'noopener noreferrer' }, website),
@@ -191,7 +199,9 @@
     const website = ui.el('input', { type: 'text', class: 'editor-field', value: kdbx.fieldText(entry, 'W'), placeholder: 'https://example.com' });
     const notes = ui.el('textarea', { class: 'editor-field editor-notes', placeholder: 'Notes' });
     notes.value = kdbx.fieldText(entry, 'N');
-    const pw = passwordField(kdbx.fieldText(entry, 'P'));
+    const pw = passwordField(kdbx.fieldText(entry, 'P'), function (setValue) {
+      openGenerator(setValue);
+    });
 
     const customWrap = ui.el('div', { class: 'custom-fields' });
     function renderCustom() {
@@ -283,7 +293,7 @@
     return ui.el('div', { class: 'field' }, [ui.el('label', {}, labelText), control]);
   }
 
-  function passwordField(initial) {
+  function passwordField(initial, onGenerate) {
     const input = ui.el('input', { type: 'password', class: 'editor-field', value: initial, placeholder: '••••••••' });
     const toggle = ui.el('button', { class: 'icon-btn pw-toggle', title: 'Show/hide password' }, '👁');
     toggle.onclick = function () {
@@ -291,7 +301,15 @@
       input.type = show ? 'text' : 'password';
       toggle.textContent = show ? '👁' : '🙈';
     };
-    const wrap = ui.el('div', { class: 'pw-wrap' }, [input, toggle]);
+    const gen = ui.el('button', { class: 'icon-btn pw-gen', title: 'Generate password' }, '🎲');
+    gen.onclick = function () {
+      onGenerate && onGenerate(function (value) {
+        input.value = value;
+        input.type = 'text';
+        toggle.textContent = '🙈';
+      });
+    };
+    const wrap = ui.el('div', { class: 'pw-wrap' }, [input, gen, toggle]);
     return { wrap, input };
   }
 
@@ -312,6 +330,101 @@
       if (f.id !== f.name) entry.fields.delete(f.id);
       kdbx.setField(entry, f.name, f.value, f.protected);
     }
+  }
+
+  /* ---- Password generator ---- */
+
+  function openGenerator(setValue) {
+    const opts = Object.assign({}, WP.password.defaults());
+    const preview = ui.el('div', { class: 'gen-preview' }, '');
+    const lengthVal = ui.el('span', { class: 'gen-val' }, String(opts.length));
+
+    const lengthRange = ui.el('input', { type: 'range', min: 4, max: 64, value: String(opts.length), class: 'gen-range' });
+    const lengthNum = ui.el('input', { type: 'number', min: 4, max: 64, value: String(opts.length), class: 'gen-num' });
+    lengthRange.oninput = function () { lengthNum.value = lengthRange.value; refresh(); };
+    lengthNum.oninput = function () {
+      const n = parseInt(lengthNum.value, 10);
+      if (!isNaN(n)) { lengthRange.value = Math.min(64, Math.max(4, n)); refresh(); }
+    };
+
+    const sets = [
+      { cb: ui.el('input', { type: 'checkbox', checked: opts.upper, id: 'gen-upper' }), label: 'Uppercase (A-Z)' },
+      { cb: ui.el('input', { type: 'checkbox', checked: opts.lower, id: 'gen-lower' }), label: 'Lowercase (a-z)' },
+      { cb: ui.el('input', { type: 'checkbox', checked: opts.digits, id: 'gen-digits' }), label: 'Digits (0-9)' },
+      { cb: ui.el('input', { type: 'checkbox', checked: opts.symbols, id: 'gen-symbols' }), label: 'Symbols (!@#$…)' },
+    ];
+    sets.forEach(function (s) {
+      s.cb.onchange = function () {
+        if (!sets.some(function (o) { return o.cb.checked; })) { s.cb.checked = true; }
+        refresh();
+      };
+    });
+
+    const ambiguous = ui.el('input', { type: 'checkbox', checked: opts.excludeAmbiguous, id: 'gen-ambiguous' });
+    ambiguous.onchange = refresh;
+
+    function refresh() {
+      opts.length = parseInt(lengthNum.value, 10) || opts.length;
+      opts.upper = sets[0].cb.checked;
+      opts.lower = sets[1].cb.checked;
+      opts.digits = sets[2].cb.checked;
+      opts.symbols = sets[3].cb.checked;
+      opts.excludeAmbiguous = ambiguous.checked;
+      try { preview.textContent = WP.password.generate(opts); }
+      catch (e) { preview.textContent = e.message; }
+      lengthVal.textContent = String(opts.length);
+    }
+    refresh();
+
+    const genBtn = ui.el('button', { class: 'btn btn-ghost' }, '🎲 Generate');
+    genBtn.onclick = refresh;
+    const applyBtn = ui.el('button', { class: 'btn btn-primary' }, 'Apply');
+    const cancelBtn = ui.el('button', { class: 'btn btn-ghost' }, 'Cancel');
+    const copyGenBtn = ui.el('button', { class: 'icon-btn' }, 'Copy');
+
+    function close() {
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+      document.removeEventListener('keydown', onKey);
+    }
+    function onKey(e) { if (e.key === 'Escape') close(); }
+
+    applyBtn.onclick = function () {
+      let value;
+      try { value = WP.password.generate(opts); } catch (e) { value = ''; }
+      setValue && setValue(value);
+      close();
+    };
+    cancelBtn.onclick = close;
+    copyGenBtn.onclick = function () {
+      doCopy(preview.textContent).then(function (ok) { if (ok) toast('Copied to clipboard'); });
+    };
+
+    const overlay = ui.el('div', { class: 'modal-overlay' }, [
+      ui.el('div', { class: 'modal gen-dialog', role: 'dialog' }, [
+        ui.el('div', { class: 'modal-head' }, [
+          ui.el('span', { class: 'modal-title' }, 'Password Generator'),
+          cancelBtn,
+        ]),
+        ui.el('div', { class: 'gen-preview-wrap' }, [preview, copyGenBtn]),
+        ui.el('div', { class: 'gen-options' }, [
+          ui.el('div', { class: 'gen-row' }, [
+            ui.el('label', { class: 'gen-len-label' }, 'Length'),
+            lengthRange,
+            lengthNum,
+            lengthVal,
+          ]),
+          ui.el('div', { class: 'gen-sets' }, sets.map(function (s) {
+            return ui.el('label', { class: 'gen-check' }, [s.cb, s.label]);
+          })),
+          ui.el('label', { class: 'gen-check' }, [ambiguous, 'Exclude ambiguous characters (0, O, o, 1, I, l, 9)']),
+        ]),
+        ui.el('div', { class: 'modal-actions' }, [genBtn, applyBtn]),
+      ]),
+    ]);
+    document.body.append(overlay);
+    document.addEventListener('keydown', onKey);
+    overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+    lengthNum.focus();
   }
 
   /* ---- CRUD actions ---- */
@@ -340,9 +453,31 @@
 
   /* ---- Helpers ---- */
 
+  // Pending clipboard-clear timer (30s after a sensitive copy).
+  let clipboardClearTimer = null;
+  const CLEAR_AFTER_MS = 30000;
+
   function lock() {
+    if (clipboardClearTimer) {
+      clearTimeout(clipboardClearTimer);
+      clipboardClearTimer = null;
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText('').catch(function () {});
+    }
     store.lock();
     location.hash = '#/';
+  }
+
+  // Wipe the clipboard after a delay. Coalesces rapid copies into one timer.
+  function scheduleClipboardClear() {
+    if (clipboardClearTimer) clearTimeout(clipboardClearTimer);
+    clipboardClearTimer = setTimeout(function () {
+      clipboardClearTimer = null;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText('').catch(function () {});
+      }
+    }, CLEAR_AFTER_MS);
   }
 
   async function save() {
@@ -367,15 +502,25 @@
     return s ? s.value : '';
   }
 
-  function copyBtn(text, label) {
-    return ui.el('button', { class: 'icon-btn', 'data-copy': text }, label || 'Copy');
+  function copyBtn(text, label, field) {
+    return ui.el('button', { class: 'icon-btn', 'data-copy': text, 'data-field': field || 'text' }, label || 'Copy');
   }
 
   function ensureUrl(u) {
     return /^[a-z][a-z0-9+.-]*:\/\//i.test(u) ? 'https://' + u : u;
   }
 
-  function copyToClipboard(text) {
+  function copyToClipboard(text, opts) {
+    opts = opts || {};
+    return new Promise(function (resolve) {
+      doCopy(text).then(function (ok) {
+        if (ok && opts.sensitive) scheduleClipboardClear();
+        resolve(ok);
+      });
+    });
+  }
+
+  function doCopy(text) {
     return new Promise(function (resolve) {
       if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(text).then(function () { resolve(true); }, function () { resolve(false); });
