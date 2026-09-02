@@ -113,11 +113,38 @@
   }
 
   // List of custom field names (standard keys excluded).
+  // Note: kdbxweb's StringMap yields the *display* name (Title, UserName, ...)
+  // for standard fields rather than the raw key (T, U, ...), so exclude both.
   function customFieldNames(entry) {
     if (!entry || !entry.fields) return [];
+    const DISPLAY_NAMES = new Set(['Title', 'UserName', 'Password', 'URL', 'Notes']);
     const names = [];
-    entry.fields.forEach(function (_, k) { if (!STANDARD_FIELDS.has(k)) names.push(k); });
+    const seen = new Set();
+    entry.fields.forEach(function (_, k) {
+      if (STANDARD_FIELDS.has(k)) return;
+      if (DISPLAY_NAMES.has(k)) return;
+      if (seen.has(k)) return;
+      seen.add(k);
+      names.push(k);
+    });
     return names;
+  }
+
+  // Create a new entry in `group` (assigns a fresh UUID).
+  function createEntry(db, group, opts) {
+    return db.createEntry(group, Object.assign({ uuid: true }, opts));
+  }
+
+  // Remove an entry from the database.
+  function removeEntry(db, entry) {
+    db.remove(entry);
+  }
+
+  // Set a string field. Empty/undefined clears it. Pass isProtected=true to
+  // store the value as a ProtectedValue (masked in the UI).
+  function setField(entry, key, value, isProtected) {
+    if (value == null || value === '') { entry.fields.delete(key); return; }
+    entry.fields.set(key, isProtected ? kdbxweb.ProtectedValue.fromString(value) : value);
   }
 
   // Recursively collect every entry in the database.
@@ -145,6 +172,7 @@
 
   WP.kdbx = {
     openFile, openFileFallback, unlock, save,
+    createEntry, removeEntry, setField,
     defaultGroup, groupUuid, entryUuid,
     isProtected, fieldText, entryTitle, customFieldNames,
     allEntries, findEntryById,

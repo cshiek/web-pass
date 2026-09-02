@@ -10,7 +10,7 @@
 
   router.add('/', function () { return unlock.render(); });
   router.add('/vault', function () { return vault.render(); });
-  router.add('/vault/:id', function (params) { return vault.entryDetail(params.id); });
+  router.add('/vault/:id', function (params) { return vault.entryEditor(params.id); });
   router.add('/settings', function () {
     const ui = WP.ui;
     const lockBtn = ui.el('button', { class: 'btn btn-ghost', id: 'lock-btn' }, '🔒 Lock');

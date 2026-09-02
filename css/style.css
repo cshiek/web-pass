@@ -195,6 +195,48 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .muted { color: var(--muted); }
 .empty { color: var(--muted); text-align: center; padding: 40px; }
 
+/* ---- Entry editor ---- */
+.editor-body {
+  padding: 20px 24px;
+  overflow-y: auto;
+}
+.editor-inner { max-width: 560px; margin: 0 auto; }
+
+.editor-form { display: flex; flex-direction: column; gap: 14px; }
+.editor-form .field { display: flex; flex-direction: column; gap: 6px; }
+.editor-form .field input,
+.editor-form .field textarea {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+}
+.editor-form .field input:focus,
+.editor-form .field textarea:focus { outline: none; border-color: var(--accent); }
+.editor-notes { min-height: 100px; resize: vertical; font-family: inherit; }
+
+.pw-wrap { display: flex; gap: 8px; align-items: center; }
+.pw-wrap .editor-field { flex: 1; }
+.pw-toggle { white-space: nowrap; }
+
+.editor-section { margin-top: 8px; }
+.section-title { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 0 0 8px; }
+
+.custom-fields { display: flex; flex-direction: column; gap: 8px; }
+.custom-row { display: flex; align-items: center; gap: 8px; }
+.custom-row .cf-name { flex: 0 0 140px; }
+.custom-row .cf-value { flex: 1; }
+.custom-row input[type="checkbox"] { width: 16px; height: 16px; flex-shrink: 0; }
+.custom-row .icon-btn { flex-shrink: 0; }
+.custom-fields .muted.small { color: var(--muted); font-size: 12px; }
+
+@media (max-width: 640px) {
+  .custom-row .cf-name { flex: 0 0 100px; }
+}
+
 .toast {
   position: fixed;
   bottom: 20px;

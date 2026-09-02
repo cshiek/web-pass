@@ -16,6 +16,9 @@
     const lockBtn = ui.el('button', { class: 'btn btn-ghost', id: 'lock-btn' }, '🔒 Lock');
     lockBtn.onclick = lock;
 
+    const newBtn = ui.el('button', { class: 'btn btn-ghost', id: 'new-btn' }, '+ New');
+    newBtn.onclick = newEntry;
+
     const saveBtn = ui.el('button', { class: 'btn btn-primary', id: 'save-btn' }, '💾 Save');
     saveBtn.onclick = save;
 
@@ -23,6 +26,7 @@
       ui.el('span', { class: 'brand' }, 'WebPass'),
       ui.el('span', { class: 'file-name' }, store.state.fileName || ''),
       ui.el('span', { class: 'count', id: 'entry-count' }, ''),
+      newBtn,
       saveBtn,
       lockBtn,
     ]);
@@ -39,9 +43,13 @@
     // persistent handlers (these DOM nodes survive re-renders of their children)
     list.addEventListener('click', function (e) {
       const btn = e.target.closest('[data-copy]');
-      if (!btn) return;
-      e.preventDefault();
-      copyToClipboard(btn.dataset.copy).then(function (ok) { toast(ok ? 'Copied to clipboard' : 'Copy failed'); });
+      if (btn) {
+        e.preventDefault();
+        copyToClipboard(btn.dataset.copy).then(function (ok) { toast(ok ? 'Copied to clipboard' : 'Copy failed'); });
+        return;
+      }
+      const card = e.target.closest('.entry');
+      if (card) { location.hash = '#/vault/' + card.dataset.uuid; }
     });
     search.oninput = function () { renderEntries(search.value); };
 
@@ -155,44 +163,166 @@
     ]);
   }
 
-  /* ---- Read-only entry detail ---- */
+  /* ---- Entry editor ---- */
 
-  function entryDetail(id) {
+  function entryEditor(id) {
     const db = store.state.db;
     if (!db) { location.hash = '#/'; return ui.el('div', {}); }
     const entry = kdbx.findEntryById(db, id);
     if (!entry) { return detailShell('Entry not found.'); }
 
-    const rows = [
-      fieldRow('Title', kdbx.entryTitle(entry), null),
-      fieldRow('Username', kdbx.fieldText(entry, 'U') || '—', kdbx.fieldText(entry, 'U') && copyBtn(kdbx.fieldText(entry, 'U'), 'Copy')),
-      fieldRow('Password',
-        kdbx.fieldText(entry, 'P') ? ui.el('span', { class: 'value masked' }, '••••••••') : ui.el('span', { class: 'value muted' }, '—'),
-        kdbx.fieldText(entry, 'P') && copyBtn(kdbx.fieldText(entry, 'P'), 'Copy')),
-    ];
-
-    const website = kdbx.fieldText(entry, 'W');
-    if (website) { rows.push(fieldRow('Website', ui.el('a', { class: 'value', href: ensureUrl(website), target: '_blank', rel: 'noopener noreferrer' }, website), null)); }
-
-    const notes = kdbx.fieldText(entry, 'N');
-    if (notes) { rows.push(fieldRow('Notes', ui.el('span', { class: 'value notes' }, notes), null)); }
-
-    const customNames = kdbx.customFieldNames(entry);
-    for (const name of customNames) {
+    // Working copy of custom fields: { id, name, value, protected }.
+    // `id` is the saved field name (or a synthetic 'new-N' for unsaved fields),
+    // used to detect renames and deletions on save.
+    const customFields = [];
+    for (const name of kdbx.customFieldNames(entry)) {
       const val = entry.fields.get(name);
-      const text = val instanceof window.kdbxweb.ProtectedValue ? val.getText() : (val || '');
-      rows.push(fieldRow(name, ui.el('span', { class: 'value' }, text || '—'), text && copyBtn(text, 'Copy')));
+      customFields.push({
+        id: name,
+        name: name,
+        value: val instanceof window.kdbxweb.ProtectedValue ? val.getText() : (val || ''),
+        protected: val instanceof window.kdbxweb.ProtectedValue,
+      });
     }
+    let newSeq = 0;
 
-    const related = ui.el('div', { class: 'muted' }, [
-      ui.el('span', {}, 'Group: ' + (entry.parentGroup && entry.parentGroup.name ? entry.parentGroup.name : '')),
+    const title = ui.el('input', { type: 'text', class: 'editor-field', value: kdbx.fieldText(entry, 'T'), placeholder: 'Title' });
+    const username = ui.el('input', { type: 'text', class: 'editor-field', value: kdbx.fieldText(entry, 'U'), placeholder: 'Username' });
+    const website = ui.el('input', { type: 'text', class: 'editor-field', value: kdbx.fieldText(entry, 'W'), placeholder: 'https://example.com' });
+    const notes = ui.el('textarea', { class: 'editor-field editor-notes', placeholder: 'Notes' });
+    notes.value = kdbx.fieldText(entry, 'N');
+    const pw = passwordField(kdbx.fieldText(entry, 'P'));
+
+    const customWrap = ui.el('div', { class: 'custom-fields' });
+    function renderCustom() {
+      ui.clear(customWrap);
+      if (customFields.length === 0) {
+        customWrap.append(ui.el('div', { class: 'muted small' }, 'No custom fields yet.'));
+      } else {
+        for (const cf of customFields) { customWrap.append(customRow(cf)); }
+      }
+      const addBtn = ui.el('button', { class: 'btn btn-ghost' }, '+ Add field');
+      addBtn.onclick = function () {
+        customFields.push({ id: 'new-' + (newSeq++), name: '', value: '', protected: false });
+        renderCustom();
+      };
+      customWrap.append(addBtn);
+    }
+    function customRow(cf) {
+      const nameInput = ui.el('input', { type: 'text', class: 'cf-name', value: cf.name, placeholder: 'Name' });
+      const valueInput = ui.el('input', { type: cf.protected ? 'password' : 'text', class: 'cf-value', value: cf.value, placeholder: 'Value' });
+      const prot = ui.el('input', { type: 'checkbox', title: 'Mask this value' });
+      prot.checked = !!cf.protected;
+      const del = ui.el('button', { class: 'icon-btn', title: 'Delete field' }, '🗑');
+      nameInput.oninput = function () { cf.name = nameInput.value; };
+      valueInput.oninput = function () { cf.value = valueInput.value; };
+      prot.onchange = function () { cf.protected = prot.checked; valueInput.type = prot.checked ? 'password' : 'text'; };
+      del.onclick = function () {
+        const i = customFields.indexOf(cf);
+        if (i >= 0) customFields.splice(i, 1);
+        renderCustom();
+      };
+      return ui.el('div', { class: 'custom-row' }, [nameInput, valueInput, prot, del]);
+    }
+    renderCustom();
+
+    const saveBtn = ui.el('button', { class: 'btn btn-primary' }, 'Save');
+    const delBtn = ui.el('button', { class: 'btn btn-ghost', style: 'color: var(--danger)' }, 'Delete');
+    const back = ui.el('button', { class: 'btn btn-ghost' }, '← Back');
+    back.onclick = function () { location.hash = '#/vault'; };
+    saveBtn.onclick = saveEntry;
+    delBtn.onclick = deleteEntry;
+
+    return ui.el('div', { class: 'vault' }, [
+      ui.el('header', { class: 'vault-header' }, [
+        ui.el('span', { class: 'brand' }, 'WebPass'),
+        ui.el('span', { class: 'file-name' }, store.state.fileName || ''),
+        saveBtn, delBtn,
+      ]),
+      ui.el('div', { class: 'editor-body' }, [
+        back,
+        ui.el('div', { class: 'editor-form' }, [
+          fieldBlock('Title', title),
+          fieldBlock('Username', username),
+          fieldBlock('Password', pw.wrap),
+          fieldBlock('Website', website),
+          fieldBlock('Notes', notes),
+          ui.el('div', { class: 'editor-section' }, [
+            ui.el('h3', { class: 'section-title' }, 'Custom fields'),
+            customWrap,
+          ]),
+        ]),
+      ]),
     ]);
 
-    return detailShell(ui.el('div', {}, [
-      ui.el('h1', {}, kdbx.entryTitle(entry)),
-      ui.el('div', { class: 'entry-body' }, rows),
-      related,
-    ]));
+    function saveEntry() {
+      kdbx.setField(entry, 'T', title.value);
+      kdbx.setField(entry, 'U', username.value);
+      kdbx.setField(entry, 'P', pw.input.value, true);
+      kdbx.setField(entry, 'W', website.value);
+      kdbx.setField(entry, 'N', notes.value);
+      saveCustomFields(entry, customFields);
+      store.markDirty(true);
+      toast('Saved');
+      renderEntries(searchValue());
+      renderTree();
+      location.hash = '#/vault';
+    }
+
+    function deleteEntry() {
+      if (!confirm('Delete this entry?\n\nThis cannot be undone.')) return;
+      kdbx.removeEntry(store.state.db, entry);
+      store.markDirty(true);
+      toast('Entry deleted');
+      renderEntries(searchValue());
+      location.hash = '#/vault';
+    }
+  }
+
+  function fieldBlock(labelText, control) {
+    return ui.el('div', { class: 'field' }, [ui.el('label', {}, labelText), control]);
+  }
+
+  function passwordField(initial) {
+    const input = ui.el('input', { type: 'password', class: 'editor-field', value: initial, placeholder: '••••••••' });
+    const toggle = ui.el('button', { class: 'icon-btn pw-toggle', title: 'Show/hide password' }, '👁');
+    toggle.onclick = function () {
+      const show = input.type === 'password';
+      input.type = show ? 'text' : 'password';
+      toggle.textContent = show ? '👁' : '🙈';
+    };
+    const wrap = ui.el('div', { class: 'pw-wrap' }, [input, toggle]);
+    return { wrap, input };
+  }
+
+  function saveCustomFields(entry, working) {
+    const STANDARD = kdbx.STANDARD_FIELDS;
+    const DISPLAY = new Set(['Title', 'UserName', 'Password', 'URL', 'Notes']);
+    const saved = [];
+    entry.fields.forEach(function (_, k) {
+      if (!STANDARD.has(k) && !DISPLAY.has(k)) saved.push(k);
+    });
+    for (const s of saved) {
+      if (!working.some(function (f) { return f.id === s || f.name === s; })) {
+        entry.fields.delete(s);
+      }
+    }
+    for (const f of working) {
+      if (!f.name) continue;
+      if (f.id !== f.name) entry.fields.delete(f.id);
+      kdbx.setField(entry, f.name, f.value, f.protected);
+    }
+  }
+
+  /* ---- CRUD actions ---- */
+
+  function newEntry() {
+    const db = store.state.db;
+    const group = store.state.selectedGroupId ? db.getGroup(store.state.selectedGroupId) : kdbx.defaultGroup(db);
+    const target = group || kdbx.defaultGroup(db);
+    const entry = kdbx.createEntry(db, target, { title: '' });
+    store.markDirty(true);
+    location.hash = '#/vault/' + kdbx.entryUuid(entry);
   }
 
   function detailShell(inner) {
@@ -274,5 +404,5 @@
     }, 1500);
   }
 
-  WP.vault = { render, entryDetail };
+  WP.vault = { render, entryEditor };
 })();
