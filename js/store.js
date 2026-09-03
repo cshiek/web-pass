@@ -13,6 +13,7 @@
       handle: null,        // reserved; openFile uses <input type=file>, so this
                        // is always null (see the KeeWeb cache-and-export model)
       selectedGroupId: null,
+      searchQuery: '',     // persisted search filter (survives back/forward nav)
       expanded: {},        // { [uuid]: true }
       dirty: false,        // in-memory db differs from what's on disk
     };

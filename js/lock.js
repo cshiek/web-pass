@@ -58,16 +58,15 @@
   }
 
   // About to lock the vault (manual Lock button or inactivity timer). If there
-  // are unsaved changes, warn and reset the timer so the user can save; the
-  // vault stays open. Returns true if it handled things and the caller should
-  // skip locking.
+  // are unsaved changes, ask whether to discard them: OK discards and locks,
+  // Cancel keeps the vault open for editing. Returns true to keep the vault
+  // open (caller skips locking), false to proceed to lock.
   function guardUnsavedOnLock() {
-    if (STORE.state.dirty) {
-      window.alert('You have unsaved changes. Save before locking?');
-      resetTimer();
-      return true;
-    }
-    return false;
+    if (!STORE.state.dirty) return false;
+    const discard = window.confirm('You have unsaved changes. Discard them and lock?');
+    if (discard) return false; // discard changes and lock
+    resetTimer();
+    return true; // keep editing; leave the vault open
   }
 
   function fire() {

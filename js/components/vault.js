@@ -11,7 +11,20 @@
     if (!db) { location.hash = '#/'; return ui.el('div', {}); }
 
     const list = ui.el('main', { class: 'entry-list', id: 'entry-list' });
-    const search = ui.el('input', { type: 'text', id: 'search', placeholder: 'Search title, username, website', autocomplete: 'off' });
+    const search = ui.el('input', { type: 'text', id: 'search', placeholder: 'Search title, username, website', autocomplete: 'off', value: store.state.searchQuery });
+    const clearBtn = ui.el('button', { class: 'search-clear', title: 'Clear filter', type: 'button' }, '✕');
+    clearBtn.style.display = store.state.searchQuery ? 'inline-block' : 'none';
+    clearBtn.onclick = function () {
+      search.value = '';
+      store.update({ searchQuery: '' });
+      clearBtn.style.display = 'none';
+      renderEntries('');
+    };
+    search.oninput = function () {
+      store.update({ searchQuery: search.value });
+      clearBtn.style.display = search.value ? 'inline-block' : 'none';
+      renderEntries(search.value);
+    };
 
     const lockBtn = ui.el('button', { class: 'btn btn-ghost', id: 'lock-btn' }, '🔒 Lock');
     lockBtn.onclick = function () { WP.session.lock(); };
@@ -36,7 +49,7 @@
     ]);
 
     const mainArea = ui.el('div', { class: 'entry-pane' }, [
-      ui.el('div', { class: 'search-bar' }, search),
+      ui.el('div', { class: 'search-bar' }, [ui.el('div', { class: 'search-field' }, [search, clearBtn])]),
       list,
     ]);
 
@@ -67,10 +80,9 @@
       const card = e.target.closest('.entry');
       if (card) { location.hash = '#/vault/' + encodeURIComponent(card.dataset.uuid); }
     });
-    search.oninput = function () { renderEntries(search.value); };
 
     renderTree(root);
-    renderEntries('', root);
+    renderEntries(store.state.searchQuery || '', root);
 
     // Inactivity auto-lock: wipe the vault after a period of no interaction.
     WP.session.arm(function () { location.hash = '#/'; });
@@ -226,6 +238,12 @@
           || kdbx.fieldText(e, 'W').toLowerCase().indexOf(q) > -1;
       });
     }
+
+    entries.sort(function (a, b) {
+      const ta = kdbx.entryTitle(a).toLowerCase();
+      const tb = kdbx.entryTitle(b).toLowerCase();
+      return ta < tb ? -1 : ta > tb ? 1 : 0;
+    });
 
     const countEl = parent.querySelector ? parent.querySelector('#entry-count') : document.getElementById('entry-count');
     if (countEl) countEl.textContent = entries.length + ' entry' + (entries.length === 1 ? '' : 's');
