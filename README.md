@@ -126,6 +126,7 @@ Navigate to `http://localhost:8080` in your web browser.
 ### 5. Saving Changes
 - Click **Save Vault** in the top navigation header (or press <kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Cmd</kbd>+<kbd>S</kbd>).
 - WebPass re-encrypts the vault, updates your browser cache, and exports the updated `.kdbx` file to your downloads folder.
+- **Browser save setting:** For the save dialog to prompt you where to write the file (instead of silently overwriting your Downloads folder), set your browser to **"Ask me where to save files before downloading"**. In Firefox this is *Options → General → Downloads → Always ask me where to save* — leaving it on "Automatically save" will drop every export straight into Downloads.
 
 ## 🛡️ Security Philosophy
 
