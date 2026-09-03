@@ -57,7 +57,21 @@
     timer = setTimeout(fire, currentTimeout());
   }
 
+  // About to lock the vault (manual Lock button or inactivity timer). If there
+  // are unsaved changes, warn and reset the timer so the user can save; the
+  // vault stays open. Returns true if it handled things and the caller should
+  // skip locking.
+  function guardUnsavedOnLock() {
+    if (STORE.state.dirty) {
+      window.alert('You have unsaved changes. Save before locking?');
+      resetTimer();
+      return true;
+    }
+    return false;
+  }
+
   function fire() {
+    if (guardUnsavedOnLock()) return;
     clearMemory();
     if (onManualLock) onManualLock();
   }
@@ -72,8 +86,10 @@
     resetTimer();
   }
 
-  // Manual lock (Lock button): wipe and hand off to the vault callback.
+  // Manual lock (Lock button): wipe and hand off to the vault callback, unless
+  // there are unsaved changes (see guardUnsavedOnLock).
   function lock() {
+    if (guardUnsavedOnLock()) return;
     clearMemory();
     if (onManualLock) onManualLock();
   }

@@ -269,9 +269,13 @@
     const rows = [
       fieldRow('Username', username, username && copyBtn(username, 'Copy', 'username')),
     ];
-    rows.push(fieldRow('Password',
-      password ? ui.el('span', { class: 'value masked' }, '••••••••') : ui.el('span', { class: 'value muted' }, '—'),
-      password && copyBtn(password, 'Copy', 'password')));
+    const pwValueNode = password
+      ? ui.el('span', { class: 'value masked' }, '••••••••')
+      : null;
+    if (pwValueNode) {
+      rows.push(fieldRow('Password', pwValueNode,
+        [copyBtn(password, 'Copy', 'password'), revealBtn(password, pwValueNode)]));
+    }
     if (website) {
       rows.push(fieldRow('Website',
         ui.el('a', { class: 'value', href: ensureUrl(website), target: '_blank', rel: 'noopener noreferrer' }, website),
@@ -1082,6 +1086,28 @@
 
   function copyBtn(text, label, field) {
     return ui.el('button', { class: 'icon-btn', 'data-copy': text, 'data-field': field || 'text' }, label || 'Copy');
+  }
+
+  // Toggle the password value between masked dots and plaintext in `valueNode`.
+  // stopPropagation keeps the click from bubbling to the vault list handler,
+  // which would otherwise open the entry card.
+  function revealBtn(password, valueNode) {
+    const btn = ui.el('button', { class: 'icon-btn pw-reveal', title: 'Show password' }, '👁');
+    btn.onclick = function (e) {
+      e.stopPropagation();
+      if (btn.dataset.revealed === 'true') {
+        valueNode.textContent = '••••••••';
+        btn.textContent = '👁';
+        btn.title = 'Show password';
+        delete btn.dataset.revealed;
+      } else {
+        valueNode.textContent = password;
+        btn.textContent = '🙈';
+        btn.title = 'Hide password';
+        btn.dataset.revealed = 'true';
+      }
+    };
+    return btn;
   }
 
   function ensureUrl(u) {
