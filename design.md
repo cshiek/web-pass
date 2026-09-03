@@ -16,10 +16,14 @@ decrypts the file; nothing is ever stored server-side.
 ### 1.2 Scope
 - **In scope:**
   - Open and load `.kdbx` file contents
-  - Save `.kdbx` file contents back to disk
-  - Delete an entry
+  - Save `.kdbx` file contents back to disk (IndexedDB cache + download export)
+  - Delete an entry (to the Recycle Bin, or permanent delete)
+  - Restore entries from the Recycle Bin
   - Edit an entry (title, username, password, URL, notes, custom fields)
+  - Group management: create / rename / delete groups, move entries between groups
+  - Import entries from CSV (Chrome, Bitwarden, 1Password, LastPass, KeePass, etc.)
   - Password generation
+  - Real-time search/filter of entries (persisted across navigation)
 - **Out of scope:**
   - Browser extension
   - MFA enrollment
@@ -171,7 +175,7 @@ Database
 - Optionally store only a non-sensitive preference (last-open file name) — never anything that unlocks the vault.
 
 ### 5.4 Browser hygiene
-- CSP header to mitigate XSS (even client-side, script injection could read an open vault).
+- CSP to mitigate XSS (even client-side, script injection could read an open vault). Deferred for `file://` runs, where a strict CSP meta tag would break local script loading; add a CSP (incl. `wasm-unsafe-eval` for argon2 WASM) when serving over HTTP.
 - Clear clipboard automatically after copying a password/username.
 - Treat copied credentials as time-sensitive; avoid leaving them in clipboard history.
 
@@ -194,7 +198,7 @@ Database
 | Unlock | Open `.kdbx` + enter master password (optional key file) | None |
 | Vault | Group/entry tree with search and password generation | Vault unlocked |
 | Entry detail / editor | Edit title, username, password, URL, notes, custom fields | Vault unlocked |
-| Settings | KDF/cipher info, auto-lock timeout, clipboard behavior, about | Vault unlocked |
+| Settings | Placeholder stub (lock button only); full KDF/cipher info, auto-lock timeout, and about panels are not yet built | Vault unlocked |
 
 > There is **no login/register** — authentication is the master password unlocking the local file.
 
@@ -210,13 +214,14 @@ App
     │   ├── PasswordField   (with generator + copy)
     │   └── CustomFields
     ├── PasswordGeneratorDialog
-    └── SettingsPanel
+    └── SettingsPanel (stub — lock button only; full settings not yet built)
 ```
 
 ### 6.3 State management
 - Hold the decrypted `Database` object in app state **only while unlocked**.
 - Track lock state; on lock, drop the in-memory database and require re-unlock.
-- Track "dirty" state to prompt before saving if the file changed.
+- Track "dirty" state to prompt before **locking or leaving** the session; the prompt lets the user keep editing or **discard unsaved changes and exit without saving**.
+- Persist the active search filter (`store.state.searchQuery`) across navigation; clear it via the ✕ control in the search box.
 
 ---
 
@@ -228,7 +233,7 @@ App
 | Wrong master password | Show generic unlock failure; do not reveal which is wrong |
 | Unsupported file type | Reject non-`.kdbx` files at the picker |
 | Save blocked (e.g. cache unavailable) | Still export a download; changes are lost on reload if neither saved |
-| File modified externally | Detect dirty state, prompt to discard or reload |
+| File modified externally | Not detected externally; the in-memory dirty flag prompts to discard on lock/leave |
 | Very large database | Show progress while decrypting; avoid blocking UI |
 
 ---
